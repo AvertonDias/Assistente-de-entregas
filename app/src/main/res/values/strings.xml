@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Assistente de Entregas</string>
+    <string name="accessibility_service_name">Assistente de Entregas - Automação</string>
+    <string name="accessibility_service_description">Permite ao Assistente de Entregas detectar endereços, identificar campos de destinatário/documento e preencher automaticamente durante as entregas.</string>
+</resources>

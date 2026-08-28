@@ -1,0 +1,37 @@
+package com.example
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
+import androidx.navigation.compose.rememberNavController
+import com.example.ui.navigation.AppNavigation
+import com.example.ui.theme.DeliveryTheme
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        val app = application as DeliveryApp
+        val action = intent?.getStringExtra("action")
+        val initialAddress = intent?.getStringExtra("initial_address")
+
+        setContent {
+            DeliveryTheme {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    val navController = rememberNavController()
+                    AppNavigation(
+                        navController = navController,
+                        app = app,
+                        initialAction = action,
+                        initialAddress = initialAddress
+                    )
+                }
+            }
+        }
+    }
+}
+

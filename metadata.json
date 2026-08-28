@@ -1,0 +1,7 @@
+{
+  "name": "Assistente de Entregas",
+  "description": "Assistente flutuante nativo para entregas com banco local, captura de assinaturas e acessibilidade.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
