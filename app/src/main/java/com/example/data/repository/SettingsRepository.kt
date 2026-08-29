@@ -39,7 +39,7 @@ data class AppSettings(
     val scanAreaBottom: Float = 0.40f,
     val customAreaConfigured: Boolean = false,
     val signatureSpeedMode: String = "ULTRA_SLOW",
-    val updateJsonUrl: String = ""
+    val updateJsonUrl: String = "https://api.github.com/repos/AvertonDias/Assistente-de-entregas/releases/latest"
 )
 
 data class ImportResult(

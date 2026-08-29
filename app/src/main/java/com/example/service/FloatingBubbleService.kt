@@ -138,6 +138,24 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
     private val serviceScope = CoroutineScope(Dispatchers.Main)
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
+    private fun triggerHapticFeedback() {
+        try {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
+                vibratorManager?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator?.vibrate(android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator?.vibrate(50)
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun executeSignatureDrawing(signatureJson: String) {
         if (signatureJson.isBlank()) {
             Toast.makeText(this@FloatingBubbleService, "Nenhuma assinatura cadastrada para este recebedor.", Toast.LENGTH_SHORT).show()
@@ -333,8 +351,13 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         onCloseService: () -> Unit,
         onOpenApp: () -> Unit
     ) {
+        val appSettings by DeliveryApp.instance.settingsRepository.getSettings().collectAsState(initial = com.example.data.repository.AppSettings())
         var isExpanded by remember { mutableStateOf(false) }
         var isCompactMode by remember { mutableStateOf(false) }
+
+        androidx.compose.runtime.LaunchedEffect(appSettings.isCompactMode) {
+            isCompactMode = appSettings.isCompactMode
+        }
         
         // Modals state
         var isEditModalOpen by remember { mutableStateOf(false) }
@@ -342,6 +365,8 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         var isMultipleRecipientsModalOpen by remember { mutableStateOf(false) }
         var searchModalQuery by remember { mutableStateOf("") }
         var isSignatureFullScreen by remember { mutableStateOf(false) }
+        var showSignatureConfirmDialog by remember { mutableStateOf(false) }
+        var pendingActionOnConfirm by remember { mutableStateOf<(() -> Unit)?>(null) }
 
         // Form Fields for Editing / Registering in the Assistant
         var editingPersonId by remember { mutableStateOf<Long?>(null) }
@@ -361,6 +386,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         var initialRecipientDocument by remember { mutableStateOf("") }
         var initialCollectedSigJson by remember { mutableStateOf("") }
         var showDiscardEditConfirmDialog by remember { mutableStateOf(false) }
+        var showBubbleClearSigConfirmDialog by remember { mutableStateOf(false) }
 
         val hasUnsavedEditChanges by remember {
             androidx.compose.runtime.derivedStateOf {
@@ -441,7 +467,74 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         Box(
             modifier = if (isSignatureFullScreen) Modifier.fillMaxSize() else Modifier.padding(8.dp)
         ) {
-            if (isSignatureFullScreen) {
+            if (showSignatureConfirmDialog) {
+                Card(
+                    modifier = Modifier
+                        .width(310.dp)
+                        .shadow(16.dp, RoundedCornerShape(16.dp)),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Draw,
+                                contentDescription = null,
+                                tint = Color(0xFF2E7D32),
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Confirmar Envio da Assinatura",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color(0xFF1B5E20)
+                            )
+                        }
+
+                        Text(
+                            text = "Deseja desenhar a assinatura na tela do aplicativo de entregas agora?",
+                            fontSize = 12.sp,
+                            color = Color(0xFF424242)
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    showSignatureConfirmDialog = false
+                                    pendingActionOnConfirm = null
+                                    updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Cancelar", fontSize = 11.sp)
+                            }
+
+                            Button(
+                                onClick = {
+                                    val action = pendingActionOnConfirm
+                                    showSignatureConfirmDialog = false
+                                    pendingActionOnConfirm = null
+                                    action?.invoke()
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                            ) {
+                                Text("Confirmar", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            } else if (isSignatureFullScreen) {
                 // TELA TODA DE ASSINATURA HORIZONTAL MÁXIMA
                 Box(
                     modifier = Modifier
@@ -971,7 +1064,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             singleLine = true
                         )
 
-                        // Assinatura (Horizontal / Tela Toda)
+                        // Assinatura
                         Text(
                             text = "Assinatura do Recebedor:",
                             fontSize = 11.sp,
@@ -1011,7 +1104,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                             Text("Refazer", fontSize = 10.sp)
                                         }
                                         OutlinedButton(
-                                            onClick = { collectedSignatureData = null },
+                                            onClick = { showBubbleClearSigConfirmDialog = true },
                                             modifier = Modifier.height(30.dp),
                                             contentPadding = PaddingValues(horizontal = 6.dp),
                                             shape = RoundedCornerShape(4.dp)
@@ -1036,7 +1129,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 Icon(Icons.Default.Draw, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "✍️ COLETAR ASSINATURA (TELA TODA)",
+                                    text = "✍️ COLETAR ASSINATURA",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -1202,41 +1295,132 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                 }
 
                 if (showDiscardEditConfirmDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showDiscardEditConfirmDialog = false },
-                        title = {
-                            Text(
-                                text = "Descartar alterações?",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
-                            )
-                        },
-                        text = {
-                            Text(
-                                text = "Você preencheu ou alterou informações que ainda não foram salvas. Tem certeza que deseja sair e perder as alterações?",
-                                fontSize = 14.sp
-                            )
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    showDiscardEditConfirmDialog = false
-                                    isEditModalOpen = false
-                                    updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.7f))
+                            .clickable(enabled = false) {},
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            modifier = Modifier
+                                .padding(16.dp)
+                                .fillMaxWidth(0.92f),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Text("Descartar", color = Color.White)
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = { showDiscardEditConfirmDialog = false }
-                            ) {
-                                Text("Continuar editando")
+                                Text(
+                                    text = "Descartar alterações?",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Você preencheu ou alterou informações que ainda não foram salvas. Tem certeza que deseja sair e perder as alterações?",
+                                    fontSize = 13.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { showDiscardEditConfirmDialog = false },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Continuar")
+                                    }
+                                    Button(
+                                        onClick = {
+                                            showDiscardEditConfirmDialog = false
+                                            isEditModalOpen = false
+                                            updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Descartar", color = Color.White)
+                                    }
+                                }
                             }
                         }
-                    )
+                    }
+                }
+
+                if (showBubbleClearSigConfirmDialog) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.7f))
+                            .clickable(enabled = false) {},
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            modifier = Modifier
+                                .padding(16.dp)
+                                .fillMaxWidth(0.92f),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = null,
+                                    tint = Color(0xFFDC2626),
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Text(
+                                    text = "Limpar assinatura?",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "A assinatura gravada para este formulário será removida. Deseja continuar?",
+                                    fontSize = 13.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { showBubbleClearSigConfirmDialog = false },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Cancelar")
+                                    }
+                                    Button(
+                                        onClick = {
+                                            collectedSignatureData = null
+                                            showBubbleClearSigConfirmDialog = false
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Sim, Limpar", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             } else if (isMultipleRecipientsModalOpen && availableRecebedores.size > 1) {
                 // MODAL DE SELEÇÃO DE MÚLTIPLOS RECEBEDORES
@@ -1415,10 +1599,14 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                     }
                 }
             } else if (!isExpanded) {
-                // Bolha Pequena Fechada
+                // Bolha Pequena Fechada (tamanho configurável)
+                val bubbleSize = appSettings.bubbleSizeDp.coerceIn(44, 72).dp
+                val iconSize = (appSettings.bubbleSizeDp.coerceIn(44, 72) * 0.5f).dp
+                val indicatorSize = (appSettings.bubbleSizeDp.coerceIn(44, 72) * 0.25f).dp.coerceAtLeast(12.dp)
+
                 Box(
                     modifier = Modifier
-                        .size(56.dp)
+                        .size(bubbleSize)
                         .shadow(8.dp, CircleShape)
                         .clip(CircleShape)
                         .background(
@@ -1433,21 +1621,25 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 onDrag(dragAmount.x, dragAmount.y)
                             }
                         }
-                        .clickable { isExpanded = true },
+                        .clickable {
+                            isCompactMode = appSettings.isCompactMode
+                            isExpanded = true
+                            updateWindowLayoutMode(OverlayMode.PANEL)
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.LocalShipping,
                         contentDescription = "Abrir Assistente de Entregas",
                         tint = Color.White,
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.size(iconSize)
                     )
 
                     // Indicador de status de detecção
                     if (person != null) {
                         Box(
                             modifier = Modifier
-                                .size(14.dp)
+                                .size(indicatorSize)
                                 .align(Alignment.TopEnd)
                                 .padding(2.dp)
                                 .background(Color(0xFF4CAF50), CircleShape)
@@ -1456,7 +1648,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                     } else if (address.isNotBlank() && address != "Nenhum endereço detectado.") {
                         Box(
                             modifier = Modifier
-                                .size(14.dp)
+                                .size(indicatorSize)
                                 .align(Alignment.TopEnd)
                                 .padding(2.dp)
                                 .background(Color(0xFFFF9800), CircleShape)
@@ -1982,6 +2174,9 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             // Botão 1: Preencher Nome e Doc no App
                             Button(
                                 onClick = {
+                                    if (appSettings.vibrationEnabled) {
+                                        triggerHapticFeedback()
+                                    }
                                     val res = AccessibilityAutomationEngine.fillFields(
                                         person.nome,
                                         person.documento
@@ -2009,8 +2204,21 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             if (hasSignature) {
                                 Button(
                                     onClick = {
-                                        isExpanded = false
-                                        executeSignatureDrawing(person.assinatura)
+                                        val performDraw = {
+                                            if (appSettings.vibrationEnabled) {
+                                                triggerHapticFeedback()
+                                            }
+                                            isExpanded = false
+                                            executeSignatureDrawing(person.assinatura)
+                                        }
+
+                                        if (appSettings.confirmBeforeSendSignature) {
+                                            pendingActionOnConfirm = performDraw
+                                            showSignatureConfirmDialog = true
+                                            updateWindowLayoutMode(OverlayMode.MODAL)
+                                        } else {
+                                            performDraw()
+                                        }
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2037,6 +2245,9 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             ) {
                                 OutlinedButton(
                                     onClick = {
+                                        if (appSettings.vibrationEnabled) {
+                                            triggerHapticFeedback()
+                                        }
                                         ClipboardHelper.copyToClipboard(
                                             this@FloatingBubbleService,
                                             "Nome",
@@ -2052,6 +2263,9 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
                                 OutlinedButton(
                                     onClick = {
+                                        if (appSettings.vibrationEnabled) {
+                                            triggerHapticFeedback()
+                                        }
                                         ClipboardHelper.copyToClipboard(
                                             this@FloatingBubbleService,
                                             "Documento",
@@ -2068,13 +2282,26 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 if (hasSignature) {
                                     OutlinedButton(
                                         onClick = {
-                                            isExpanded = false
-                                            val res = AccessibilityAutomationEngine.fillFields(
-                                                person.nome,
-                                                person.documento
-                                            )
-                                            Toast.makeText(this@FloatingBubbleService, res.message, Toast.LENGTH_SHORT).show()
-                                            executeSignatureDrawing(person.assinatura)
+                                            val performFillAndSign = {
+                                                if (appSettings.vibrationEnabled) {
+                                                    triggerHapticFeedback()
+                                                }
+                                                isExpanded = false
+                                                val res = AccessibilityAutomationEngine.fillFields(
+                                                    person.nome,
+                                                    person.documento
+                                                )
+                                                Toast.makeText(this@FloatingBubbleService, res.message, Toast.LENGTH_SHORT).show()
+                                                executeSignatureDrawing(person.assinatura)
+                                            }
+
+                                            if (appSettings.confirmBeforeSendSignature) {
+                                                pendingActionOnConfirm = performFillAndSign
+                                                showSignatureConfirmDialog = true
+                                                updateWindowLayoutMode(OverlayMode.MODAL)
+                                            } else {
+                                                performFillAndSign()
+                                            }
                                         },
                                         modifier = Modifier.weight(1.3f).height(32.dp),
                                         shape = RoundedCornerShape(8.dp),

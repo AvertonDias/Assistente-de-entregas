@@ -60,10 +60,20 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke as CanvasStroke
+import androidx.compose.ui.input.pointer.pointerInput
 import com.example.accessibility.AccessibilityAutomationEngine
 import com.example.data.model.Point
 import com.example.data.model.SignatureData
 import com.example.data.model.Stroke
+import com.example.ui.components.buildSmoothComposePath
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,24 +90,28 @@ fun AutomationLabScreen(
     var testSuccess by remember { mutableStateOf<Boolean?>(null) }
     var selectedLabSpeed by remember { mutableStateOf("ULTRA_SLOW") }
 
-    // Simulação de assinatura de teste para automação
+    // Traços de assinatura coletados no laboratório
+    val labSignatureStrokes = remember { mutableStateListOf<Stroke>() }
+    val labCurrentPoints = remember { mutableStateListOf<Point>() }
+
+    // Simulação de assinatura de teste para automação (pontos perfeitamente centralizados em 600x400)
     val mockTestSignature = remember {
         SignatureData(
             strokes = listOf(
                 Stroke(
                     points = listOf(
-                        Point(100f, 150f, 1000L),
-                        Point(200f, 120f, 1050L),
-                        Point(350f, 220f, 1100L),
-                        Point(500f, 100f, 1150L)
+                        Point(80f, 170f, 1000L),
+                        Point(180f, 130f, 1050L),
+                        Point(320f, 250f, 1100L),
+                        Point(520f, 140f, 1150L)
                     ),
                     strokeWidth = 6f,
                     color = 0xFF1565C0.toInt()
                 ),
                 Stroke(
                     points = listOf(
-                        Point(120f, 260f, 1200L),
-                        Point(450f, 260f, 1250L)
+                        Point(100f, 280f, 1200L),
+                        Point(480f, 280f, 1250L)
                     ),
                     strokeWidth = 4f,
                     color = 0xFF1565C0.toInt()
@@ -243,25 +257,139 @@ fun AutomationLabScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Área Simulada de Assinatura
-                    Text(text = "Área de Assinatura Simulada", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.Gray)
+                    // Quadro Simulado de Assinatura
+                    Text(text = "Quadro de Assinatura Simulada", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.Gray)
                     Spacer(modifier = Modifier.height(4.dp))
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(120.dp)
-                            .background(Color(0xFFFAFAFA), RoundedCornerShape(8.dp))
-                            .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
-                            .semantics { contentDescription = "assinatura area assine aqui signature canvas" }
-                            .testTag("lab_signature_area"),
+                            .height(180.dp)
+                            .background(Color.White, RoundedCornerShape(8.dp))
+                            .border(1.5.dp, if (labSignatureStrokes.isNotEmpty()) Color(0xFF1565C0) else Color.LightGray, RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(8.dp))
+                            .semantics { contentDescription = "signature_canvas_box_area assine_aqui_canvas" }
+                            .testTag("lab_signature_area")
+                            .pointerInput(Unit) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    down.consume()
+                                    labCurrentPoints.clear()
+                                    val startPoint = Point(down.position.x, down.position.y, System.currentTimeMillis())
+                                    labCurrentPoints.add(startPoint)
+
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (change.pressed) {
+                                            change.consume()
+                                            labCurrentPoints.add(
+                                                Point(change.position.x, change.position.y, System.currentTimeMillis())
+                                            )
+                                        } else {
+                                            break
+                                        }
+                                    } while (true)
+
+                                    if (labCurrentPoints.isNotEmpty()) {
+                                        labSignatureStrokes.add(
+                                            Stroke(
+                                                points = labCurrentPoints.toList(),
+                                                strokeWidth = 5f,
+                                                color = 0xFF1565C0.toInt()
+                                            )
+                                        )
+                                        labCurrentPoints.clear()
+                                    }
+                                }
+                            },
                         contentAlignment = Alignment.Center
                     ) {
+                        if (labSignatureStrokes.isEmpty() && labCurrentPoints.isEmpty()) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = Icons.Default.Draw,
+                                    contentDescription = null,
+                                    tint = Color.LightGray,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "✍️ DESENHE SUA ASSINATURA AQUI",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            for (stroke in labSignatureStrokes) {
+                                if (stroke.points.size == 1) {
+                                    drawCircle(
+                                        color = Color(stroke.color),
+                                        radius = 3f,
+                                        center = Offset(stroke.points[0].x, stroke.points[0].y)
+                                    )
+                                } else if (stroke.points.size >= 2) {
+                                    val path = buildSmoothComposePath(stroke.points)
+                                    drawPath(
+                                        path = path,
+                                        color = Color(stroke.color),
+                                        style = CanvasStroke(
+                                            width = stroke.strokeWidth,
+                                            cap = StrokeCap.Round,
+                                            join = StrokeJoin.Round
+                                        )
+                                    )
+                                }
+                            }
+
+                            if (labCurrentPoints.size == 1) {
+                                drawCircle(
+                                    color = Color(0xFF1565C0),
+                                    radius = 3f,
+                                    center = Offset(labCurrentPoints[0].x, labCurrentPoints[0].y)
+                                )
+                            } else if (labCurrentPoints.size >= 2) {
+                                val activePath = buildSmoothComposePath(labCurrentPoints.toList())
+                                drawPath(
+                                    path = activePath,
+                                    color = Color(0xFF1565C0),
+                                    style = CanvasStroke(
+                                        width = 5f,
+                                        cap = StrokeCap.Round,
+                                        join = StrokeJoin.Round
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            text = "[ ÁREA DE ASSINATURA SIMULADA ]",
-                            fontSize = 12.sp,
-                            color = Color.Gray,
-                            fontWeight = FontWeight.Bold
+                            text = if (labSignatureStrokes.isNotEmpty()) "✓ ${labSignatureStrokes.size} traço(s) coletado(s)" else "Nenhum traço coletado",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (labSignatureStrokes.isNotEmpty()) Color(0xFF2E7D32) else Color.Gray
                         )
+                        if (labSignatureStrokes.isNotEmpty()) {
+                            OutlinedButton(
+                                onClick = { labSignatureStrokes.clear() },
+                                modifier = Modifier.height(30.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Limpar Desenho", fontSize = 10.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -339,8 +467,10 @@ fun AutomationLabScreen(
                     ) {
                         OutlinedButton(
                             onClick = {
+                                labSignatureStrokes.clear()
+                                labSignatureStrokes.addAll(mockTestSignature.strokes)
                                 AccessibilityAutomationEngine.dispatchSignatureGestures(mockTestSignature, speedMode = selectedLabSpeed) { ok, msg ->
-                                    testReportMessage = msg
+                                    testReportMessage = "$msg (Desenho gerado: ${mockTestSignature.strokes.size} traços)"
                                     testSuccess = ok
                                 }
                             },
@@ -356,6 +486,7 @@ fun AutomationLabScreen(
                             onClick = {
                                 labReceiverName = ""
                                 labDocument = ""
+                                labSignatureStrokes.clear()
                                 testReportMessage = "Campos limpos com sucesso."
                                 testSuccess = null
                             },

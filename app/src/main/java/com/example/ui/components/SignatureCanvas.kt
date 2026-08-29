@@ -8,6 +8,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -142,6 +144,7 @@ fun SignatureCanvas(
     var canvasWidth by remember { mutableStateOf(1200f) }
     var canvasHeight by remember { mutableStateOf(600f) }
     var showDiscardConfirmDialog by remember { mutableStateOf(false) }
+    var showClearConfirmDialog by remember { mutableStateOf(false) }
 
     val handleAttemptClose: () -> Unit = {
         // Se houver novos traços desenhados e não salvos, pede confirmação
@@ -152,59 +155,16 @@ fun SignatureCanvas(
         }
     }
 
-    if (showDiscardConfirmDialog) {
-        AlertDialog(
-            onDismissRequest = { showDiscardConfirmDialog = false },
-            icon = {
-                Icon(
-                    imageVector = Icons.Default.Warning,
-                    contentDescription = null,
-                    tint = Color(0xFFE65100),
-                    modifier = Modifier.size(32.dp)
-                )
-            },
-            title = {
-                Text(
-                    text = "Descartar assinatura?",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
-                )
-            },
-            text = {
-                Text(
-                    text = "Você desenhou uma assinatura que ainda não foi salva. Deseja realmente sair sem salvar?",
-                    fontSize = 13.5.sp,
-                    color = Color(0xFF424242)
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showDiscardConfirmDialog = false
-                        onCancel()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
-                ) {
-                    Text("Descartar e Sair", fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                OutlinedButton(
-                    onClick = { showDiscardConfirmDialog = false }
-                ) {
-                    Text("Continuar Editando")
-                }
-            }
-        )
-    }
-
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(if (isDarkTheme) Color(0xFF0F172A) else Color(0xFFF8FAFC))
-            .padding(horizontal = 6.dp, vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(horizontal = 6.dp, vertical = 4.dp)
     ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
         // Cabeçalho fino e ultra-compacto para maximizar a área vertical do canvas na orientação paisagem
         Row(
             modifier = Modifier
@@ -245,6 +205,106 @@ fun SignatureCanvas(
                     tint = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B),
                     modifier = Modifier.size(20.dp)
                 )
+            }
+        }
+
+        // Barra de Botões compacta e ergonômica na PARTE SUPERIOR da tela
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Botão Limpar
+            OutlinedButton(
+                onClick = {
+                    showClearConfirmDialog = true
+                },
+                enabled = strokes.isNotEmpty() || currentStrokePoints.isNotEmpty(),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(38.dp)
+                    .testTag("clear_signature_button"),
+                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF475569) else Color(0xFFCBD5E1)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (isDarkTheme) Color(0xFFF87171) else Color(0xFFDC2626)
+                ),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp)
+            ) {
+                Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(3.dp))
+                Text("LIMPAR", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+
+            // Botão Desfazer
+            OutlinedButton(
+                onClick = {
+                    if (strokes.isNotEmpty()) {
+                        strokes.removeAt(strokes.lastIndex)
+                    }
+                },
+                enabled = strokes.isNotEmpty(),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(38.dp)
+                    .testTag("undo_signature_button"),
+                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF475569) else Color(0xFFCBD5E1)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF334155)
+                ),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(3.dp))
+                Text("DESFAZER", fontSize = 11.sp)
+            }
+
+            // Botão Sair / Cancelar
+            OutlinedButton(
+                onClick = handleAttemptClose,
+                modifier = Modifier
+                    .weight(0.9f)
+                    .height(38.dp)
+                    .testTag("cancel_signature_button"),
+                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF475569) else Color(0xFFCBD5E1)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF64748B)
+                ),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp)
+            ) {
+                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(3.dp))
+                Text("SAIR", fontSize = 11.sp)
+            }
+
+            // Botão Confirmar
+            Button(
+                onClick = {
+                    val finalData = SignatureData(
+                        strokes = strokes.toList(),
+                        canvasWidth = canvasWidth,
+                        canvasHeight = canvasHeight
+                    )
+                    onSignatureConfirmed(finalData)
+                },
+                enabled = strokes.isNotEmpty(),
+                modifier = Modifier
+                    .weight(1.3f)
+                    .height(38.dp)
+                    .testTag("confirm_signature_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isDarkTheme) Color(0xFF2563EB) else MaterialTheme.colorScheme.primary
+                ),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp)
+            ) {
+                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("CONFIRMAR", fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
             }
         }
 
@@ -373,107 +433,148 @@ fun SignatureCanvas(
                 }
             }
         }
+    }
 
-        // Barra de Botões compacta e ergonômica no rodapé
-        Row(
+    // SOBREPOSIÇÃO INLINE DE CONFIRMAÇÃO PARA LIMPAR ASSINATURA
+    if (showClearConfirmDialog) {
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.75f))
+                .clickable(enabled = false) {},
+            contentAlignment = Alignment.Center
         ) {
-            // Botão Limpar
-            OutlinedButton(
-                onClick = {
-                    strokes.clear()
-                    currentStrokePoints.clear()
-                },
-                enabled = strokes.isNotEmpty() || currentStrokePoints.isNotEmpty(),
+            Card(
                 modifier = Modifier
-                    .weight(1f)
-                    .height(38.dp)
-                    .testTag("clear_signature_button"),
-                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF475569) else Color(0xFFCBD5E1)),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = if (isDarkTheme) Color(0xFFF87171) else Color(0xFFDC2626)
-                ),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 4.dp)
+                    .padding(24.dp)
+                    .widthIn(max = 420.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) Color(0xFF1E293B) else Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
             ) {
-                Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(3.dp))
-                Text("LIMPAR", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
-
-            // Botão Desfazer
-            OutlinedButton(
-                onClick = {
-                    if (strokes.isNotEmpty()) {
-                        strokes.removeAt(strokes.lastIndex)
-                    }
-                },
-                enabled = strokes.isNotEmpty(),
-                modifier = Modifier
-                    .weight(1f)
-                    .height(38.dp)
-                    .testTag("undo_signature_button"),
-                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF475569) else Color(0xFFCBD5E1)),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF334155)
-                ),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 4.dp)
-            ) {
-                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(3.dp))
-                Text("DESFAZER", fontSize = 11.sp)
-            }
-
-            // Botão Sair / Cancelar
-            OutlinedButton(
-                onClick = handleAttemptClose,
-                modifier = Modifier
-                    .weight(0.9f)
-                    .height(38.dp)
-                    .testTag("cancel_signature_button"),
-                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF475569) else Color(0xFFCBD5E1)),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF64748B)
-                ),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 4.dp)
-            ) {
-                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(3.dp))
-                Text("SAIR", fontSize = 11.sp)
-            }
-
-            // Botão Confirmar
-            Button(
-                onClick = {
-                    val finalData = SignatureData(
-                        strokes = strokes.toList(),
-                        canvasWidth = canvasWidth,
-                        canvasHeight = canvasHeight
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Clear,
+                        contentDescription = null,
+                        tint = Color(0xFFDC2626),
+                        modifier = Modifier.size(36.dp)
                     )
-                    onSignatureConfirmed(finalData)
-                },
-                enabled = strokes.isNotEmpty(),
-                modifier = Modifier
-                    .weight(1.3f)
-                    .height(38.dp)
-                    .testTag("confirm_signature_button"),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isDarkTheme) Color(0xFF2563EB) else MaterialTheme.colorScheme.primary
-                ),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 4.dp)
-            ) {
-                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("CONFIRMAR", fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                    Text(
+                        text = "Limpar toda a assinatura?",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = if (isDarkTheme) Color.White else Color(0xFF0F172A)
+                    )
+                    Text(
+                        text = "Todos os traços desenhados na tela serão apagados. Deseja continuar?",
+                        fontSize = 13.5.sp,
+                        color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF475569),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { showClearConfirmDialog = false },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Cancelar")
+                        }
+                        Button(
+                            onClick = {
+                                strokes.clear()
+                                currentStrokePoints.clear()
+                                showClearConfirmDialog = false
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Sim, Limpar", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
         }
     }
+
+    // SOBREPOSIÇÃO INLINE DE CONFIRMAÇÃO PARA DESCARTAR E SAIR
+    if (showDiscardConfirmDialog) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.75f))
+                .clickable(enabled = false) {},
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .widthIn(max = 420.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) Color(0xFF1E293B) else Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = Color(0xFFE65100),
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Text(
+                        text = "Descartar assinatura?",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = if (isDarkTheme) Color.White else Color(0xFF0F172A)
+                    )
+                    Text(
+                        text = "Você desenhou uma assinatura que ainda não foi salva. Deseja realmente sair sem salvar?",
+                        fontSize = 13.5.sp,
+                        color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF475569),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { showDiscardConfirmDialog = false },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Continuar")
+                        }
+                        Button(
+                            onClick = {
+                                showDiscardConfirmDialog = false
+                                onCancel()
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Descartar e Sair", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 }
 

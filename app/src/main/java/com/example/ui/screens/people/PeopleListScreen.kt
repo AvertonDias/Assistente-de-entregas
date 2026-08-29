@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.entity.Person
@@ -225,6 +226,20 @@ private fun PersonCardItem(
     onCopyName: () -> Unit,
     onCopyDoc: () -> Unit
 ) {
+    val context = LocalContext.current
+    val addressTitle = remember(person.endereco, person.numero, person.bairro) {
+        val base = person.endereco.trim()
+        val num = person.numero.trim()
+        val neighborhood = person.bairro.trim()
+        val addr = when {
+            base.isNotBlank() && num.isNotBlank() -> "$base, $num"
+            base.isNotBlank() -> base
+            num.isNotBlank() -> "Nº $num"
+            else -> "Sem endereço cadastrado"
+        }
+        if (neighborhood.isNotBlank() && base.isNotBlank()) "$addr - $neighborhood" else addr
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -234,18 +249,32 @@ private fun PersonCardItem(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
+            // TÍTULO PRINCIPAL: ENDEREÇO
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = person.nome,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f)
-                )
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = addressTitle,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
                 Row {
                     IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
@@ -257,37 +286,40 @@ private fun PersonCardItem(
                 }
             }
 
-            if (person.documento.isNotBlank()) {
-                Text(
-                    text = "Doc: ${person.documento}",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Medium
-                )
-            }
+            Spacer(modifier = Modifier.height(6.dp))
 
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Row(verticalAlignment = Alignment.Top) {
+            // DESTINATÁRIO (NOME) ABAIXO DO ENDEREÇO
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = Icons.Default.LocationOn,
+                    imageVector = Icons.Default.Person,
                     contentDescription = null,
                     tint = Color.Gray,
                     modifier = Modifier.size(16.dp)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-                val addr = person.endereco.ifBlank {
-                    if (person.numero.isNotBlank()) "Nº ${person.numero}" else "Sem endereço cadastrado"
-                }
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = addr,
-                    fontSize = 12.sp,
+                    text = person.nome.ifBlank { "Sem nome cadastrado" },
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            // DOCUMENTO
+            if (person.documento.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Doc: ${person.documento}",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(start = 22.dp)
+                )
+            }
 
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // BOTÕES DE AÇÃO RÁPIDA
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -326,6 +358,28 @@ private fun PersonCardItem(
                             Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(12.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Copiar Doc", fontSize = 11.sp)
+                        }
+                    }
+                }
+
+                if (addressTitle != "Sem endereço cadastrado") {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                ClipboardHelper.copyToClipboard(context, "Endereço", addressTitle)
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(vertical = 6.dp, horizontal = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(12.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Copiar End", fontSize = 11.sp)
                         }
                     }
                 }

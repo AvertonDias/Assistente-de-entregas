@@ -130,14 +130,10 @@ fun HomeScreen(
 
     LaunchedEffect(Unit) {
         viewModel.refreshPermissions(context)
-    }
-
-    LaunchedEffect(settings.updateJsonUrl) {
-        if (settings.updateJsonUrl.isNotBlank()) {
-            val info = UpdateChecker.checkForUpdates(context, settings.updateJsonUrl)
-            if (info != null) {
-                updateInfoAvailable = info
-            }
+        delay(1500) // Verifica atualizações automaticamente em segundo plano após inicialização
+        val info = UpdateChecker.checkForUpdates(context)
+        if (info != null) {
+            updateInfoAvailable = info
         }
     }
 
@@ -333,35 +329,7 @@ fun HomeScreen(
                 }
             }
 
-            // Bento Hero 3: Grande Botão de Ação "INICIAR MODO ENTREGA"
-            item {
-                Button(
-                    onClick = { onNavigate(Screen.DeliveryMode.route) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(60.dp)
-                        .testTag("start_delivery_mode_button"),
-                    shape = RoundedCornerShape(28.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = BentoPrimary,
-                        contentColor = Color.White
-                    ),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.RocketLaunch,
-                        contentDescription = null,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "INICIAR MODO ENTREGA",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        letterSpacing = 0.5.sp
-                    )
-                }
-            }
+
 
             // Bento Grid 4: Módulos do Sistema
             item {

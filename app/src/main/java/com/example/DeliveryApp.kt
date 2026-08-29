@@ -44,6 +44,7 @@ class DeliveryApp : Application() {
         } catch (e: Exception) {
             Log.w("DeliveryApp", "Firebase initialization deferred: ${e.message}")
         }
+        com.example.util.CrashReporter.init(this)
     }
 
     companion object {

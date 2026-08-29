@@ -180,18 +180,6 @@ fun PersonEditScreen(
     var isSignatureModalOpen by remember { mutableStateOf(false) }
     var signatureTargetId by remember { mutableStateOf<String?>(null) }
 
-    DisposableEffect(isSignatureModalOpen) {
-        if (isSignatureModalOpen) {
-            val original = activity?.requestedOrientation ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            onDispose {
-                activity?.requestedOrientation = original
-            }
-        } else {
-            onDispose { }
-        }
-    }
-
     // Temp signature from shared ViewModels/Drawing events (if any, as in original template)
     val tempSignature by viewModel.tempSignature.collectAsStateWithLifecycle()
     LaunchedEffect(tempSignature) {
@@ -548,45 +536,34 @@ fun PersonEditScreen(
         }
     }
 
-    // Modal de Desenho de Assinatura (Horizontal / Tela Toda Máxima)
+    // TELA TODA DE ASSINATURA HORIZONTAL MÁXIMA
     if (isSignatureModalOpen && signatureTargetId != null) {
         val currentSigData = remember(signatureTargetId, editingRecebedor?.assinatura) {
             val raw = editingRecebedor?.assinatura ?: ""
             if (raw.isNotBlank()) SignatureData.fromJson(raw) else null
         }
 
-        Dialog(
-            onDismissRequest = {
-                isSignatureModalOpen = false
-                signatureTargetId = null
-            },
-            properties = DialogProperties(
-                usePlatformDefaultWidth = false,
-                decorFitsSystemWindows = false
-            )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF0F172A))
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xFF0F172A))
-            ) {
-                SignatureCanvas(
-                    modifier = Modifier.fillMaxSize(),
-                    initialSignature = currentSigData,
-                    isDarkTheme = true,
-                    onSignatureConfirmed = { signature ->
-                        val sigJson = signature.toJson()
-                        editingRecebedor = editingRecebedor?.copy(assinatura = sigJson)
-                        isSignatureModalOpen = false
-                        signatureTargetId = null
-                        Toast.makeText(context, "Assinatura coletada!", Toast.LENGTH_SHORT).show()
-                    },
-                    onCancel = {
-                        isSignatureModalOpen = false
-                        signatureTargetId = null
-                    }
-                )
-            }
+            SignatureCanvas(
+                modifier = Modifier.fillMaxSize(),
+                initialSignature = currentSigData,
+                isDarkTheme = true,
+                onSignatureConfirmed = { signature ->
+                    val sigJson = signature.toJson()
+                    editingRecebedor = editingRecebedor?.copy(assinatura = sigJson)
+                    isSignatureModalOpen = false
+                    signatureTargetId = null
+                    Toast.makeText(context, "Assinatura gravada!", Toast.LENGTH_SHORT).show()
+                },
+                onCancel = {
+                    isSignatureModalOpen = false
+                    signatureTargetId = null
+                }
+            )
         }
     }
 }
@@ -606,6 +583,7 @@ fun RecebedorDialog(
     var localAssinatura by remember { mutableStateOf(recebedor.assinatura) }
     var nomeError by remember { mutableStateOf(false) }
     var showDiscardConfirmDialog by remember { mutableStateOf(false) }
+    var showClearSigConfirmDialog by remember { mutableStateOf(false) }
 
     var isListeningName by remember { mutableStateOf(false) }
     var isListeningDoc by remember { mutableStateOf(false) }
@@ -687,6 +665,53 @@ fun RecebedorDialog(
                     onClick = { showDiscardConfirmDialog = false }
                 ) {
                     Text("Continuar Editando")
+                }
+            }
+        )
+    }
+
+    if (showClearSigConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearSigConfirmDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Clear,
+                    contentDescription = null,
+                    tint = Color(0xFFDC2626),
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Limpar assinatura salva?",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Text(
+                    text = "A assinatura cadastrada para este recebedor será removida. Deseja continuar?",
+                    fontSize = 13.5.sp,
+                    color = Color(0xFF424242)
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        localAssinatura = ""
+                        onClearSignature()
+                        showClearSigConfirmDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
+                ) {
+                    Text("Sim, Limpar", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showClearSigConfirmDialog = false }
+                ) {
+                    Text("Cancelar")
                 }
             }
         )
@@ -865,8 +890,7 @@ fun RecebedorDialog(
                                 }
                                 OutlinedButton(
                                     onClick = {
-                                        localAssinatura = ""
-                                        onClearSignature()
+                                        showClearSigConfirmDialog = true
                                     },
                                     shape = RoundedCornerShape(4.dp),
                                     modifier = Modifier.height(32.dp),

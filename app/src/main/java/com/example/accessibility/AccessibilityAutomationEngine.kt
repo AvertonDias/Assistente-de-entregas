@@ -152,14 +152,11 @@ object AccessibilityAutomationEngine {
                             if (root != null) {
                                 val pkg = root.packageName?.toString() ?: ""
                                 if (pkg.isNotBlank() && pkg != service.packageName) {
-                                    targetRootNode?.recycle()
                                     targetRootNode = root
                                     targetPkg = pkg
                                     break
                                 } else if (targetRootNode == null) {
                                     targetRootNode = root
-                                } else {
-                                    root.recycle()
                                 }
                             }
                         }
@@ -181,11 +178,7 @@ object AccessibilityAutomationEngine {
             return
         }
 
-        try {
-            scanAndExtractScreenData(targetRootNode, targetPkg)
-        } finally {
-            targetRootNode.recycle()
-        }
+        scanAndExtractScreenData(targetRootNode, targetPkg)
     }
 
     /**
@@ -318,7 +311,6 @@ object AccessibilityAutomationEngine {
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             collectTextsInRect(child, rectLeft, rectTop, rectRight, rectBottom, list, screenW, screenH)
-            child.recycle()
         }
     }
 
@@ -346,7 +338,6 @@ object AccessibilityAutomationEngine {
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             collectAllTexts(child, list)
-            child.recycle()
         }
     }
 
@@ -449,8 +440,9 @@ object AccessibilityAutomationEngine {
             )
 
             return FillResult(nameFilled = nameFilled, documentFilled = docFilled, message = msg)
-        } finally {
-            rootNode.recycle()
+        } catch (e: Exception) {
+            val errorMsg = "Erro ao preencher formulário: ${e.localizedMessage}"
+            return FillResult(nameFilled = false, documentFilled = false, message = errorMsg)
         }
     }
 
@@ -506,14 +498,21 @@ object AccessibilityAutomationEngine {
     }
 
     private fun setTextToNode(node: AccessibilityNodeInfo, text: String): Boolean {
+        if (!node.isVisibleToUser) return false
         val arguments = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
-        val result = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+        var result = false
+        try {
+            result = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+        } catch (e: Exception) {
+            result = false
+        }
         if (!result) {
-            // Fallback de foco + paste
-            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            return node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            try {
+                node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                result = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            } catch (ignored: Exception) {}
         }
         return result
     }
@@ -557,7 +556,6 @@ object AccessibilityAutomationEngine {
             if (signatureNode != null) {
                 signatureNode.getBoundsInScreen(bounds)
             }
-            rootNode.recycle()
         }
 
         // Se não encontrou nó explícito ou se as dimensões forem muito pequenas/incompatíveis, usar a área padrão do quadro de assinatura dos apps de entrega
@@ -768,8 +766,14 @@ object AccessibilityAutomationEngine {
         val text = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
         val className = node.className?.toString()?.lowercase(Locale.ROOT) ?: ""
 
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+
+        // Rótulos de texto simples (TextView sem filhos e com pouca altura) não são telas de desenho
+        val isLabelOnly = className.contains("textview", ignoreCase = true) && node.childCount == 0 && bounds.height() < 120
+
         val metadata = "$desc $viewId $text $className"
-        if (matchesField(metadata, profile.signatureFieldHints) ||
+        val isMatch = matchesField(metadata, profile.signatureFieldHints) ||
             viewId.contains("signature", ignoreCase = true) ||
             viewId.contains("canvas", ignoreCase = true) ||
             viewId.contains("pad", ignoreCase = true) ||
@@ -780,7 +784,8 @@ object AccessibilityAutomationEngine {
             desc.contains("canvas", ignoreCase = true) ||
             text.contains("assine", ignoreCase = true) ||
             text.contains("assinatura", ignoreCase = true)
-        ) {
+
+        if (isMatch && !isLabelOnly && bounds.width() >= 150 && bounds.height() >= 100) {
             return node
         }
 
@@ -789,6 +794,12 @@ object AccessibilityAutomationEngine {
             val found = findSignatureAreaNode(child)
             if (found != null) return found
         }
+
+        // Caso seja uma correspondência mas de tamanho marginal, retorna como plano B
+        if (isMatch && !isLabelOnly) {
+            return node
+        }
+
         return null
     }
 

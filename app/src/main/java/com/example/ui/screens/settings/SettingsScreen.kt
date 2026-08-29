@@ -106,8 +106,6 @@ fun SettingsScreen(
 
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var updateInfoAvailable by remember { mutableStateOf<AppUpdateInfo?>(null) }
-    var showJsonExampleDialog by remember { mutableStateOf(false) }
-    var updateUrlInput by remember(settings.updateJsonUrl) { mutableStateOf(settings.updateJsonUrl) }
 
     Scaffold(
         topBar = {
@@ -290,71 +288,6 @@ fun SettingsScreen(
                         valueRange = 44f..72f,
                         steps = 6
                     )
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-
-                    Text("Área Alvo de Leitura na Tela", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Escolha onde o balão deve capturar o endereço para consulta", fontSize = 11.sp, color = Color.Gray)
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val isFocusMode = settings.scanTargetMode == "NEXT_DELIVERY"
-                        val isCustomMode = settings.scanTargetMode == "CUSTOM_RECT" || settings.scanTargetMode == "CUSTOM_AREA"
-                        Button(
-                            onClick = { scope.launch { settingsRepository.setScanTargetMode("NEXT_DELIVERY") } },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isFocusMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                                contentColor = if (isFocusMode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        ) {
-                            Text("🎯 Foco: Próxima", fontSize = 12.sp, fontWeight = if (isFocusMode) FontWeight.Bold else FontWeight.Normal)
-                        }
-
-                        Button(
-                            onClick = { scope.launch { settingsRepository.setScanTargetMode("ALL_SCREEN") } },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (!isFocusMode && !isCustomMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                                contentColor = if (!isFocusMode && !isCustomMode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        ) {
-                            Text("📱 Tela Toda", fontSize = 12.sp, fontWeight = if (!isFocusMode && !isCustomMode) FontWeight.Bold else FontWeight.Normal)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedButton(
-                        onClick = {
-                            if (PermissionUtils.hasOverlayPermission(context)) {
-                                showAppSelector = true
-                            } else {
-                                Toast.makeText(context, "Conceda a permissão de sobreposição primeiro.", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.CropFree, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("📐 Desenhar Área Alvo em um App", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    if (settings.scanTargetMode == "CUSTOM_RECT" || settings.scanTargetMode == "CUSTOM_AREA") {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "✓ Área customizada ativa: L=${(settings.scanAreaLeft * 100).toInt()}% T=${(settings.scanAreaTop * 100).toInt()}% R=${(settings.scanAreaRight * 100).toInt()}% B=${(settings.scanAreaBottom * 100).toInt()}%",
-                            fontSize = 11.sp,
-                            color = Color(0xFF137333),
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
                 }
             }
 
@@ -404,93 +337,48 @@ fun SettingsScreen(
                             onCheckedChange = { scope.launch { settingsRepository.setConfirmBeforeSendSignature(it) } }
                         )
                     }
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-
-                    Text("Velocidade do Desenho da Assinatura", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Desenho ultra suave, detalhado e cadenciado no aplicativo de entrega", fontSize = 11.sp, color = Color.Gray)
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "🐢 Ultra Lenta (Fixa & Precisa)",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    }
                 }
             }
 
-            // Seção de Atualização do Aplicativo (OTA)
+            // Seção de Atualização do Aplicativo (Automática)
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "ATUALIZAÇÃO DO APLICATIVO",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        IconButton(onClick = { showJsonExampleDialog = true }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Info, contentDescription = "Como configurar", tint = MaterialTheme.colorScheme.primary)
-                        }
-                    }
+                    Text(
+                        text = "ATUALIZAÇÃO DO APLICATIVO",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Versão instalada: v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
+                        text = "Versão Instalada: v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedTextField(
-                        value = updateUrlInput,
-                        onValueChange = {
-                            updateUrlInput = it
-                            scope.launch { settingsRepository.setUpdateJsonUrl(it) }
-                        },
-                        label = { Text("URL do arquivo version.json") },
-                        placeholder = { Text("https://raw.githubusercontent.com/usuario/repo/main/version.json") },
-                        modifier = Modifier.fillMaxWidth(),
-                        textStyle = MaterialTheme.typography.bodySmall,
-                        singleLine = true
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Canal de atualização automática conectado. O aplicativo verifica novas versões diretamente do repositório oficial.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     Button(
                         onClick = {
-                            if (updateUrlInput.isBlank()) {
-                                Toast.makeText(context, "Insira a URL do arquivo version.json acima", Toast.LENGTH_SHORT).show()
-                            } else {
-                                isCheckingUpdate = true
-                                scope.launch {
-                                    val info = UpdateChecker.checkForUpdates(context, updateUrlInput)
-                                    isCheckingUpdate = false
-                                    if (info != null) {
-                                        updateInfoAvailable = info
-                                    } else {
-                                        Toast.makeText(context, "Seu app já está atualizado (v${BuildConfig.VERSION_NAME})!", Toast.LENGTH_SHORT).show()
-                                    }
+                            isCheckingUpdate = true
+                            scope.launch {
+                                val info = UpdateChecker.checkForUpdates(context)
+                                isCheckingUpdate = false
+                                if (info != null) {
+                                    updateInfoAvailable = info
+                                } else {
+                                    Toast.makeText(context, "Seu app já está atualizado na versão mais recente (v${BuildConfig.VERSION_NAME})!", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         },
@@ -501,69 +389,11 @@ fun SettingsScreen(
                         if (isCheckingUpdate) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("VERIFICANDO...")
+                            Text("VERIFICANDO ATUALIZAÇÃO...")
                         } else {
                             Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("VERIFICAR ATUALIZAÇÃO")
-                        }
-                    }
-                }
-            }
-
-            // Seção de Backup & Migração de Dados
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "BACKUP & MIGRAÇÃO (JSON)",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Exporte todos os destinatários, históricos e configurações para backup ou transferência para outro aparelho.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    val json = settingsRepository.exportAllDataJson()
-                                    exportedJsonText = json
-                                    showExportDialog = true
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("EXPORTAR")
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                importJsonText = ""
-                                showImportDialog = true
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("IMPORTAR")
                         }
                     }
                 }
@@ -709,64 +539,6 @@ fun SettingsScreen(
             UpdateDialog(
                 updateInfo = info,
                 onDismiss = { updateInfoAvailable = null }
-            )
-        }
-
-        // Diálogo de Ajuda / Exemplo do Json de Atualização
-        if (showJsonExampleDialog) {
-            val sampleJson = """
-{
-  "versionCode": 2,
-  "versionName": "1.1.0",
-  "apkUrl": "https://github.com/seu-usuario/seu-repo/releases/download/v1.1.0/app-release.apk",
-  "changelog": "- Adicionado suporte a microfone inteligente\n- Correções na validação de CPF\n- Atualização direta de APK",
-  "forceUpdate": false
-}
-            """.trimIndent()
-
-            AlertDialog(
-                onDismissRequest = { showJsonExampleDialog = false },
-                title = { Text("Como criar o version.json", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
-                text = {
-                    Column {
-                        Text(
-                            "Hospede um arquivo chamado 'version.json' no seu GitHub Releases, GitHub Gist ou servidor web com a seguinte estrutura:",
-                            fontSize = 12.sp
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = sampleJson,
-                            onValueChange = {},
-                            readOnly = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(160.dp),
-                            textStyle = MaterialTheme.typography.bodySmall
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Quando você publicar um novo APK, altere 'versionCode' para um número maior (ex: 2) e cole a URL do arquivo bruto acima.",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            ClipboardHelper.copyToClipboard(context, "Exemplo version.json", sampleJson)
-                            Toast.makeText(context, "Modelo copiado!", Toast.LENGTH_SHORT).show()
-                            showJsonExampleDialog = false
-                        }
-                    ) {
-                        Text("COPIAR MODELO")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showJsonExampleDialog = false }) {
-                        Text("FECHAR")
-                    }
-                }
             )
         }
     }

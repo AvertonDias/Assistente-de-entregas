@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface PersonDao {
 
-    @Query("SELECT * FROM pessoas ORDER BY nome ASC")
+    @Query("SELECT * FROM pessoas ORDER BY endereco ASC, numero ASC, nome ASC")
     fun getAllPersons(): Flow<List<Person>>
 
     @Query("SELECT * FROM pessoas WHERE id = :id LIMIT 1")
@@ -29,7 +29,7 @@ interface PersonDao {
            OR bairro LIKE '%' || :query || '%' 
            OR cidade LIKE '%' || :query || '%' 
            OR numero LIKE '%' || :query || '%'
-        ORDER BY nome ASC
+        ORDER BY endereco ASC, numero ASC, nome ASC
     """)
     fun searchPersons(query: String): Flow<List<Person>>
 

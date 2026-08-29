@@ -28,65 +28,137 @@ data class AppUpdateInfo(
 
 object UpdateChecker {
 
+    const val DEFAULT_GITHUB_API_URL = "https://api.github.com/repos/AvertonDias/Assistente-de-entregas/releases/latest"
+    const val DEFAULT_RAW_VERSION_URL = "https://raw.githubusercontent.com/AvertonDias/Assistente-de-entregas/main/version.json"
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
     /**
-     * Busca o arquivo version.json no servidor/GitHub e compara com a versão atual do app.
+     * Busca atualizações automaticamente sem necessidade de URL manual.
+     * Tenta primeiro o GitHub Releases oficial e depois o version.json bruto.
      */
     suspend fun checkForUpdates(
         context: Context,
-        url: String
+        customUrl: String? = null
     ): AppUpdateInfo? = withContext(Dispatchers.IO) {
-        if (url.isBlank()) return@withContext null
+        val urlsToTry = if (!customUrl.isNullOrBlank()) {
+            listOf(customUrl.trim())
+        } else {
+            listOf(DEFAULT_GITHUB_API_URL, DEFAULT_RAW_VERSION_URL)
+        }
 
-        try {
-            val request = Request.Builder()
-                .url(url.trim())
-                .header("User-Agent", "Mozilla/5.0 Android App UpdateChecker")
-                .build()
-
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) return@withContext null
-
-            val jsonString = response.body?.string() ?: return@withContext null
-            val json = JSONObject(jsonString)
-
-            val remoteVersionCode = json.optInt("versionCode", 0)
-            val remoteVersionName = json.optString("versionName", "")
-            val apkUrl = json.optString("apkUrl", "")
-            val changelog = json.optString("changelog", "Melhorias gerais e correções.")
-            val forceUpdate = json.optBoolean("forceUpdate", false)
-
-            val currentVersionCode = try {
-                val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    pInfo.longVersionCode.toInt()
-                } else {
-                    @Suppress("DEPRECATION")
-                    pInfo.versionCode
-                }
-            } catch (e: Exception) {
-                BuildConfig.VERSION_CODE
-            }
-
-            if (remoteVersionCode > currentVersionCode && apkUrl.isNotBlank()) {
-                AppUpdateInfo(
-                    versionCode = remoteVersionCode,
-                    versionName = remoteVersionName,
-                    apkUrl = apkUrl,
-                    changelog = changelog,
-                    forceUpdate = forceUpdate
-                )
+        val currentVersionCode = try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pInfo.longVersionCode.toInt()
             } else {
-                null
+                @Suppress("DEPRECATION")
+                pInfo.versionCode
             }
         } catch (e: Exception) {
-            e.printStackTrace()
-            null
+            BuildConfig.VERSION_CODE
         }
+        val currentVersionName = BuildConfig.VERSION_NAME
+
+        for (url in urlsToTry) {
+            try {
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Assistente-Entregas-Android-Updater")
+                    .header("Accept", "application/json")
+                    .build()
+
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) continue
+
+                val jsonString = response.body?.string() ?: continue
+                val json = JSONObject(jsonString)
+
+                // Caso 1: Formato padrão de Release do GitHub API
+                if (json.has("tag_name") || json.has("assets")) {
+                    val tagName = json.optString("tag_name", "").removePrefix("v").trim()
+                    val releaseName = json.optString("name", tagName)
+                    val body = json.optString("body", "Nova versão disponível no repositório.")
+                    val assets = json.optJSONArray("assets")
+                    var apkDownloadUrl = ""
+
+                    if (assets != null) {
+                        for (i in 0 until assets.length()) {
+                            val asset = assets.getJSONObject(i)
+                            val name = asset.optString("name", "")
+                            if (name.endsWith(".apk", ignoreCase = true)) {
+                                apkDownloadUrl = asset.optString("browser_download_url", "")
+                                break
+                            }
+                        }
+                    }
+
+                    // Se não tiver asset .apk explícito, tenta link direto padrão de release
+                    if (apkDownloadUrl.isBlank() && tagName.isNotBlank()) {
+                        apkDownloadUrl = "https://github.com/AvertonDias/Assistente-de-entregas/releases/download/v$tagName/app-release.apk"
+                    }
+
+                    if (isRemoteNewer(tagName, currentVersionName, currentVersionCode) && apkDownloadUrl.isNotBlank()) {
+                        return@withContext AppUpdateInfo(
+                            versionCode = extractVersionCode(tagName, currentVersionCode + 1),
+                            versionName = tagName.ifBlank { releaseName },
+                            apkUrl = apkDownloadUrl,
+                            changelog = body,
+                            forceUpdate = false
+                        )
+                    }
+                }
+
+                // Caso 2: Formato customizado version.json
+                val remoteVersionCode = json.optInt("versionCode", 0)
+                val remoteVersionName = json.optString("versionName", "")
+                val apkUrl = json.optString("apkUrl", "")
+                val changelog = json.optString("changelog", "Melhorias gerais e correções.")
+                val forceUpdate = json.optBoolean("forceUpdate", false)
+
+                if ((remoteVersionCode > currentVersionCode || isRemoteNewer(remoteVersionName, currentVersionName, currentVersionCode)) && apkUrl.isNotBlank()) {
+                    return@withContext AppUpdateInfo(
+                        versionCode = if (remoteVersionCode > 0) remoteVersionCode else currentVersionCode + 1,
+                        versionName = remoteVersionName.ifBlank { "v${remoteVersionCode}" },
+                        apkUrl = apkUrl,
+                        changelog = changelog,
+                        forceUpdate = forceUpdate
+                    )
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        null
+    }
+
+    private fun isRemoteNewer(remote: String, current: String, currentCode: Int): Boolean {
+        if (remote.isBlank()) return false
+        val cleanRemote = remote.removePrefix("v").trim()
+        val cleanCurrent = current.removePrefix("v").trim()
+        
+        if (cleanRemote == cleanCurrent) return false
+
+        val remoteParts = cleanRemote.split(".").mapNotNull { it.toIntOrNull() }
+        val currentParts = cleanCurrent.split(".").mapNotNull { it.toIntOrNull() }
+
+        val length = maxOf(remoteParts.size, currentParts.size)
+        for (i in 0 until length) {
+            val r = remoteParts.getOrElse(i) { 0 }
+            val c = currentParts.getOrElse(i) { 0 }
+            if (r > c) return true
+            if (r < c) return false
+        }
+        return false
+    }
+
+    private fun extractVersionCode(tag: String, fallback: Int): Int {
+        val digitsOnly = tag.filter { it.isDigit() }
+        return digitsOnly.toIntOrNull() ?: fallback
     }
 
     /**
@@ -200,3 +272,4 @@ object UpdateChecker {
         }
     }
 }
+

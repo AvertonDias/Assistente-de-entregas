@@ -49,6 +49,19 @@ import androidx.compose.ui.unit.sp
 import com.example.accessibility.AccessibilityAutomationEngine
 import com.example.util.PermissionUtils
 
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import android.widget.Toast
+import android.content.Intent
+import android.net.Uri
+import com.example.util.CrashReporter
+import android.os.Build
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiagnosticScreen(
@@ -109,6 +122,113 @@ fun DiagnosticScreen(
                         DiagnosticItemRow("Motor de Automação Conectado", autoState.isServiceActive)
                         HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.surfaceVariant)
                         DiagnosticItemRow("Banco Local Room (SQLite)", true)
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                        DiagnosticItemRow("Firebase Crashlytics (Telemetria)", true)
+                    }
+                }
+            }
+
+            // Ações de Relatório e Telemetria
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "RELATÓRIO & TELEMETRIA DE ERROS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Erros e falhas do app são capturados e gravados com segurança. Você pode enviar o relatório detalhado por e-mail ou compartilhar via qualquer mensageiro.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val report = buildString {
+                                        appendLine("=== RELATÓRIO DE DIAGNÓSTICO DO ASSISTENTE ===")
+                                        appendLine("Data/Hora: ${java.util.Date()}")
+                                        appendLine("Aparelho: ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}, SDK ${Build.VERSION.SDK_INT})")
+                                        appendLine("Sobreposição de Tela: ${if (hasOverlay) "OK (Autorizada)" else "PENDENTE"}")
+                                        appendLine("Serviço de Acessibilidade: ${if (hasAccessibility) "OK (Ativo)" else "PENDENTE"}")
+                                        appendLine("Último aplicativo em foco: ${autoState.currentPackageName}")
+                                        appendLine("Último endereço detectado: ${autoState.detectedAddressText}")
+                                        appendLine("\n--- ÚLTIMO CRASH / ERRO SALVO ---")
+                                        appendLine(CrashReporter.getLastCrashReport() ?: "Nenhum crash crítico registrado.")
+                                        appendLine("\n--- LOGS RECENTES DE OPERAÇÃO ---")
+                                        autoState.logs.takeLast(25).forEach {
+                                            appendLine("${it.formattedTime} [${it.tag}] ${it.message}")
+                                        }
+                                        CrashReporter.getRecentLogs().takeLast(25).forEach {
+                                            appendLine(it)
+                                        }
+                                    }
+
+                                    val emailIntent = Intent(Intent.ACTION_SENDTO).apply {
+                                        data = Uri.parse("mailto:verton3@gmail.com")
+                                        putExtra(Intent.EXTRA_EMAIL, arrayOf("verton3@gmail.com"))
+                                        putExtra(Intent.EXTRA_SUBJECT, "Relatório de Diagnóstico & Erros - Assistente de Entregas")
+                                        putExtra(Intent.EXTRA_TEXT, report)
+                                    }
+                                    try {
+                                        context.startActivity(Intent.createChooser(emailIntent, "Enviar Relatório por E-mail"))
+                                    } catch (e: Exception) {
+                                        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(Intent.EXTRA_EMAIL, arrayOf("verton3@gmail.com"))
+                                            putExtra(Intent.EXTRA_SUBJECT, "Relatório de Erros - Assistente")
+                                            putExtra(Intent.EXTRA_TEXT, report)
+                                        }
+                                        context.startActivity(Intent.createChooser(sendIntent, "Enviar Relatório"))
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Enviar p/ E-mail", fontSize = 12.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    val report = buildString {
+                                        appendLine("=== RELATÓRIO DE DIAGNÓSTICO DO ASSISTENTE ===")
+                                        appendLine("Aparelho: ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})")
+                                        appendLine("Último pacote: ${autoState.currentPackageName}")
+                                        appendLine("Último endereço: ${autoState.detectedAddressText}")
+                                        appendLine("\n--- LOGS RECENTES ---")
+                                        autoState.logs.takeLast(15).forEach {
+                                            appendLine("${it.formattedTime} [${it.tag}] ${it.message}")
+                                        }
+                                        CrashReporter.getRecentLogs().takeLast(15).forEach {
+                                            appendLine(it)
+                                        }
+                                    }
+
+                                    val sendIntent = Intent().apply {
+                                        action = Intent.ACTION_SEND
+                                        putExtra(Intent.EXTRA_TEXT, report)
+                                        type = "text/plain"
+                                    }
+                                    val shareIntent = Intent.createChooser(sendIntent, "Compartilhar Relatório")
+                                    context.startActivity(shareIntent)
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("WhatsApp / Outros", fontSize = 12.sp)
+                            }
+                        }
                     }
                 }
             }
