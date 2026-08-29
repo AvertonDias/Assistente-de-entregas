@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 data class HomeUiState(
     val isOverlayGranted: Boolean = false,
     val isAccessibilityEnabled: Boolean = false,
+    val isRecordAudioGranted: Boolean = false,
     val isBubbleServiceRunning: Boolean = false
 )
 
@@ -51,10 +52,12 @@ class HomeViewModel(
         val overlay = PermissionUtils.hasOverlayPermission(context)
         val accessibility = PermissionUtils.isAccessibilityServiceEnabled(context) ||
                 AccessibilityAutomationEngine.isServiceActive()
+        val recordAudio = PermissionUtils.hasRecordAudioPermission(context)
 
         _uiState.value = _uiState.value.copy(
             isOverlayGranted = overlay,
-            isAccessibilityEnabled = accessibility
+            isAccessibilityEnabled = accessibility,
+            isRecordAudioGranted = recordAudio
         )
     }
 

@@ -65,6 +65,16 @@ object PermissionUtils {
     }
 
     /**
+     * Verifica se a permissão do microfone (RECORD_AUDIO) está concedida
+     */
+    fun hasRecordAudioPermission(context: Context): Boolean {
+        return androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
      * Abre as configurações de acessibilidade do Android
      */
     fun openAccessibilitySettings(context: Context) {

@@ -1,5 +1,7 @@
 package com.example.ui.screens.home
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -114,6 +116,17 @@ fun HomeScreen(
     val authState by authViewModel?.uiState?.collectAsState() ?: remember { mutableStateOf(null) }
     var showAppSelector by remember { mutableStateOf(false) }
     var updateInfoAvailable by remember { mutableStateOf<AppUpdateInfo?>(null) }
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        viewModel.refreshPermissions(context)
+        if (isGranted) {
+            Toast.makeText(context, "Permissão de microfone concedida!", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Permissão de microfone não concedida.", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.refreshPermissions(context)
@@ -259,19 +272,31 @@ fun HomeScreen(
                         // Pills dos serviços no estilo Bento
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             BentoPillChip(
                                 modifier = Modifier.weight(1f),
-                                text = if (uiState.isAccessibilityEnabled) "● Acessibilidade" else "○ Acessibilidade",
+                                text = if (uiState.isAccessibilityEnabled) "● Acessib." else "○ Acessib.",
                                 isActive = uiState.isAccessibilityEnabled,
                                 onClick = { onNavigate(Screen.AccessibilitySettings.route) }
                             )
                             BentoPillChip(
                                 modifier = Modifier.weight(1f),
-                                text = if (uiState.isOverlayGranted) "● Sobreposição" else "○ Sobreposição",
+                                text = if (uiState.isOverlayGranted) "● Sobrepos." else "○ Sobrepos.",
                                 isActive = uiState.isOverlayGranted,
                                 onClick = { onNavigate(Screen.OverlaySettings.route) }
+                            )
+                            BentoPillChip(
+                                modifier = Modifier.weight(1f),
+                                text = if (uiState.isRecordAudioGranted) "● Microfone" else "○ Microfone",
+                                isActive = uiState.isRecordAudioGranted,
+                                onClick = {
+                                    if (!uiState.isRecordAudioGranted) {
+                                        audioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                    } else {
+                                        Toast.makeText(context, "Permissão do microfone já está ativa!", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             )
                         }
 

@@ -222,14 +222,12 @@ object AddressNormalizer {
         // Verifica correspondência de palavras-chave da rua
         val targetInQueryCount = targetWords.count { word ->
             nQuery.contains(word) || queryWords.any { qWord ->
-                qWord == word || 
-                (qWord.length >= 4 && word.length >= 4 && (qWord.startsWith(word) || word.startsWith(qWord)))
+                isSimilarWord(qWord, word)
             }
         }
         val queryInTargetCount = queryWords.count { word ->
             nTarget.contains(word) || targetWords.any { tWord ->
-                tWord == word || 
-                (tWord.length >= 4 && word.length >= 4 && (tWord.startsWith(word) || word.startsWith(tWord)))
+                isSimilarWord(tWord, word)
             }
         }
 
@@ -252,6 +250,43 @@ object AddressNormalizer {
             } else {
                 ""
             }
+        }
+    }
+
+    fun levenshteinDistance(s1: String, s2: String): Int {
+        val m = s1.length
+        val n = s2.length
+        val dp = Array(m + 1) { IntArray(n + 1) }
+
+        for (i in 0..m) dp[i][0] = i
+        for (j in 0..n) dp[0][j] = j
+
+        for (i in 1..m) {
+            for (j in 1..n) {
+                val cost = if (s1[i - 1] == s2[j - 1]) 0 else 1
+                dp[i][j] = minOf(
+                    dp[i - 1][j] + 1,
+                    dp[i][j - 1] + 1,
+                    dp[i - 1][j - 1] + cost
+                )
+            }
+        }
+        return dp[m][n]
+    }
+
+    fun isSimilarWord(w1: String, w2: String): Boolean {
+        if (w1 == w2) return true
+        if (w1.isBlank() || w2.isBlank()) return false
+        if (w1.length >= 4 && w2.length >= 4 && (w1.startsWith(w2) || w2.startsWith(w1))) return true
+
+        val maxLen = maxOf(w1.length, w2.length)
+        if (maxLen < 3) return w1 == w2
+
+        val dist = levenshteinDistance(w1, w2)
+        return when {
+            maxLen <= 4 -> dist <= 1
+            maxLen <= 8 -> dist <= 2
+            else -> dist <= 3
         }
     }
 }
