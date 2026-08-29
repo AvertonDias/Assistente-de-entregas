@@ -1,6 +1,8 @@
 package com.example.ui.screens.delivery
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -72,6 +75,28 @@ fun DeliveryModeScreen(
     val context = LocalContext.current
     val state by viewModel.state.collectAsState()
     var searchDialogOpen by remember { mutableStateOf(false) }
+
+    var isListeningAddress by remember { mutableStateOf(false) }
+    var pendingMicAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            pendingMicAction?.invoke()
+        } else {
+            Toast.makeText(context, "Permissão do microfone necessária para falar o endereço.", Toast.LENGTH_SHORT).show()
+        }
+        pendingMicAction = null
+    }
+
+    fun runWithMicPermission(action: () -> Unit) {
+        if (com.example.util.PermissionUtils.hasRecordAudioPermission(context)) {
+            action()
+        } else {
+            pendingMicAction = action
+            micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -136,8 +161,40 @@ fun DeliveryModeScreen(
                                 .fillMaxWidth()
                                 .testTag("delivery_address_input"),
                             trailingIcon = {
-                                IconButton(onClick = { viewModel.searchPersonsForAddress(state.currentAddress) }) {
-                                    Icon(Icons.Default.Search, contentDescription = "Pesquisar")
+                                Row {
+                                    IconButton(
+                                        onClick = {
+                                            if (!isListeningAddress) {
+                                                runWithMicPermission {
+                                                    isListeningAddress = true
+                                                    com.example.util.SpeechHelper.startListening(
+                                                        context = context,
+                                                        onReady = { Toast.makeText(context, "Fale o endereço...", Toast.LENGTH_SHORT).show() },
+                                                        onResult = { result ->
+                                                            isListeningAddress = false
+                                                            if (result.isNotBlank()) {
+                                                                viewModel.updateAddress(result)
+                                                                viewModel.searchPersonsForAddress(result)
+                                                            }
+                                                        },
+                                                        onError = { err ->
+                                                            isListeningAddress = false
+                                                            Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Mic,
+                                            contentDescription = "Falar Endereço",
+                                            tint = if (isListeningAddress) MaterialTheme.colorScheme.primary else Color.Gray
+                                        )
+                                    }
+                                    IconButton(onClick = { viewModel.searchPersonsForAddress(state.currentAddress) }) {
+                                        Icon(Icons.Default.Search, contentDescription = "Pesquisar")
+                                    }
                                 }
                             },
                             singleLine = true

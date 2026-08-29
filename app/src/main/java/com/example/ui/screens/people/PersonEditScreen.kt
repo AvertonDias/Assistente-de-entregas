@@ -2,6 +2,8 @@ package com.example.ui.screens.people
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -609,6 +611,27 @@ fun RecebedorDialog(
     var isListeningDoc by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
+    var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            pendingAction?.invoke()
+        } else {
+            Toast.makeText(context, "Permissão de microfone necessária para comando de voz.", Toast.LENGTH_SHORT).show()
+        }
+        pendingAction = null
+    }
+
+    fun runWithMicPermission(action: () -> Unit) {
+        if (com.example.util.PermissionUtils.hasRecordAudioPermission(context)) {
+            action()
+        } else {
+            pendingAction = action
+            micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     val hasUnsavedDialogChanges = remember(nome, documento, localAssinatura, recebedor) {
         nome.trim() != recebedor.nome.trim() ||
                 documento.trim() != recebedor.documento.trim() ||
@@ -706,23 +729,25 @@ fun RecebedorDialog(
                         IconButton(
                             onClick = {
                                 if (!isListeningName) {
-                                    isListeningName = true
-                                    com.example.util.SpeechHelper.startListening(
-                                        context = context,
-                                        onReady = { Toast.makeText(context, "Fale o nome...", Toast.LENGTH_SHORT).show() },
-                                        onResult = { result ->
-                                            isListeningName = false
-                                            val processed = com.example.util.SpeechHelper.processSpokenName(result)
-                                            if (processed.isNotBlank()) {
-                                                nome = processed
-                                                nomeError = false
+                                    runWithMicPermission {
+                                        isListeningName = true
+                                        com.example.util.SpeechHelper.startListening(
+                                            context = context,
+                                            onReady = { Toast.makeText(context, "Fale o nome...", Toast.LENGTH_SHORT).show() },
+                                            onResult = { result ->
+                                                isListeningName = false
+                                                val processed = com.example.util.SpeechHelper.processSpokenName(result)
+                                                if (processed.isNotBlank()) {
+                                                    nome = processed
+                                                    nomeError = false
+                                                }
+                                            },
+                                            onError = { err ->
+                                                isListeningName = false
+                                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                                             }
-                                        },
-                                        onError = { err ->
-                                            isListeningName = false
-                                            Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
-                                        }
-                                    )
+                                        )
+                                    }
                                 }
                             }
                         ) {
@@ -768,22 +793,24 @@ fun RecebedorDialog(
                         IconButton(
                             onClick = {
                                 if (!isListeningDoc) {
-                                    isListeningDoc = true
-                                    com.example.util.SpeechHelper.startListening(
-                                        context = context,
-                                        onReady = { Toast.makeText(context, "Fale os números do documento...", Toast.LENGTH_SHORT).show() },
-                                        onResult = { result ->
-                                            isListeningDoc = false
-                                            val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
-                                            if (processed.isNotBlank()) {
-                                                documento = processed
+                                    runWithMicPermission {
+                                        isListeningDoc = true
+                                        com.example.util.SpeechHelper.startListening(
+                                            context = context,
+                                            onReady = { Toast.makeText(context, "Fale os números do documento...", Toast.LENGTH_SHORT).show() },
+                                            onResult = { result ->
+                                                isListeningDoc = false
+                                                val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
+                                                if (processed.isNotBlank()) {
+                                                    documento = processed
+                                                }
+                                            },
+                                            onError = { err ->
+                                                isListeningDoc = false
+                                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                                             }
-                                        },
-                                        onError = { err ->
-                                            isListeningDoc = false
-                                            Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
-                                        }
-                                    )
+                                        )
+                                    }
                                 }
                             }
                         ) {
