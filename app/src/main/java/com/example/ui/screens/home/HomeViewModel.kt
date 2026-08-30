@@ -34,6 +34,14 @@ class HomeViewModel(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            FloatingBubbleService.isRunning.collect { running ->
+                _uiState.value = _uiState.value.copy(isBubbleServiceRunning = running)
+            }
+        }
+    }
+
     val deliveryStats: StateFlow<DeliveryStats> = deliveryRepository.getDeliveryStats()
         .stateIn(
             scope = viewModelScope,

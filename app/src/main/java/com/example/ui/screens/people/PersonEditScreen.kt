@@ -450,29 +450,32 @@ fun PersonEditScreen(
                             return@Button
                         }
 
-                        val first = recebedoresList.first()
-                        if (first.nome.isBlank()) {
+                        val formattedRecebedores = recebedoresList.map {
+                            it.copy(nome = AddressNormalizer.capitalizeWords(it.nome.trim()))
+                        }
+                        val primaryRecebedor = formattedRecebedores.first()
+                        if (primaryRecebedor.nome.isBlank()) {
                             Toast.makeText(context, "O primeiro recebedor deve ter um nome válido!", Toast.LENGTH_SHORT).show()
                             return@Button
                         }
 
                         // Filtrar se algum recebedor ficou com o nome em branco
-                        val invalid = recebedoresList.any { it.nome.isBlank() }
+                        val invalid = formattedRecebedores.any { it.nome.isBlank() }
                         if (invalid) {
                             Toast.makeText(context, "Todos os recebedores devem ter nomes preenchidos!", Toast.LENGTH_SHORT).show()
                             return@Button
                         }
 
-                        val extraList = if (recebedoresList.size > 1) {
-                            recebedoresList.subList(1, recebedoresList.size)
+                        val extraList = if (formattedRecebedores.size > 1) {
+                            formattedRecebedores.subList(1, formattedRecebedores.size)
                         } else {
                             emptyList()
                         }
 
                         val person = Person(
                             id = personId,
-                            nome = first.nome.trim(),
-                            documento = first.documento.trim(),
+                            nome = primaryRecebedor.nome,
+                            documento = primaryRecebedor.documento.trim(),
                             endereco = address.trim(),
                             numero = "",
                             complemento = "",
@@ -480,7 +483,7 @@ fun PersonEditScreen(
                             cidade = "",
                             uf = "",
                             observacao = "",
-                            assinatura = first.assinatura,
+                            assinatura = primaryRecebedor.assinatura,
                             coRecebedoresJson = Recebedor.listToJson(extraList)
                         )
 

@@ -229,18 +229,15 @@ class FirebaseAuthRepositoryImpl(
                 throw Exception("Credencial do Google não reconhecida.")
             }
         } catch (e: Exception) {
-            Log.w("AuthRepository", "Google Sign-In failed, using local Google fallback: ${e.message}")
-            // Fallback Local Google Sign-In (Sempre funcional em qualquer emulador/dispositivo)
-            val fallbackEmail = "usuario.google@gmail.com"
-            val fallbackName = "Usuário Google"
-            saveLocalUser(fallbackEmail, fallbackName)
-            val user = UserProfile(
-                uid = "local_google_${fallbackEmail.hashCode()}",
-                email = fallbackEmail,
-                displayName = fallbackName,
-                photoUrl = null
-            )
-            AuthResult.Success(user, isNewUser = false)
+            Log.w("AuthRepository", "Google Sign-In failed: ${e.message}", e)
+            val className = e.javaClass.simpleName
+            if (className.contains("Cancellation", ignoreCase = true) || 
+                e.message?.contains("cancel", ignoreCase = true) == true) {
+                return AuthResult.Error("Login cancelado pelo usuário.")
+            }
+            
+            // Retorna o erro real para o usuário saber o que aconteceu (ex: erro de configuração de chave SHA-1 ou falta de conta no dispositivo)
+            return AuthResult.Error("Erro na autenticação do Google: ${e.localizedMessage ?: e.message}")
         }
     }
 

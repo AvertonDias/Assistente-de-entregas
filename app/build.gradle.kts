@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.entregas.kspqvx"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.1.3"
+    versionCode = 6
+    versionName = "1.1.4"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -27,9 +27,9 @@ android {
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
+      storePassword = System.getenv("STORE_PASSWORD") ?: "android123"
       keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
+      keyPassword = System.getenv("KEY_PASSWORD") ?: "android123"
     }
     val customDebugKeystore = file("${rootDir}/debug.keystore")
     if (customDebugKeystore.exists()) {

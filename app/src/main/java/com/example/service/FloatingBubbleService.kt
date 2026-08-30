@@ -119,6 +119,9 @@ import com.example.util.ClipboardHelper
 import com.example.util.PermissionUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -134,6 +137,8 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
     private var windowManager: WindowManager? = null
     private var floatingView: ComposeView? = null
     private var windowLayoutParams: WindowManager.LayoutParams? = null
+    private var lastBubbleX: Int = 20
+    private var lastBubbleY: Int = 200
 
     private val serviceScope = CoroutineScope(Dispatchers.Main)
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -189,6 +194,22 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         }
     }
 
+    private fun getScreenBounds(): Pair<Int, Int> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val windowMetrics = windowManager?.currentWindowMetrics
+            val bounds = windowMetrics?.bounds
+            if (bounds != null) {
+                Pair(bounds.width(), bounds.height())
+            } else {
+                val dm = resources.displayMetrics
+                Pair(dm.widthPixels, dm.heightPixels)
+            }
+        } else {
+            val dm = resources.displayMetrics
+            Pair(dm.widthPixels, dm.heightPixels)
+        }
+    }
+
     private enum class OverlayMode { BUBBLE, PANEL, MODAL, FULLSCREEN_SIGNATURE }
 
     private fun updateWindowLayoutMode(mode: OverlayMode) {
@@ -197,14 +218,33 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
         when (mode) {
             OverlayMode.BUBBLE, OverlayMode.PANEL -> {
+                val (screenWidth, screenHeight) = getScreenBounds()
+                val density = resources.displayMetrics.density
+                val estimatedWidth = if (mode == OverlayMode.PANEL) (330 * density).toInt() else (64 * density).toInt()
+                val estimatedHeight = if (mode == OverlayMode.PANEL) (400 * density).toInt() else (64 * density).toInt()
+                val viewWidth = view.width.takeIf { it > 0 } ?: estimatedWidth
+                val viewHeight = view.height.takeIf { it > 0 } ?: estimatedHeight
+
+                val maxX = (screenWidth - viewWidth).coerceAtLeast(0)
+                val maxY = (screenHeight - viewHeight).coerceAtLeast(0)
+
+                lastBubbleX = lastBubbleX.coerceIn(0, maxX)
+                lastBubbleY = lastBubbleY.coerceIn(0, maxY)
+
                 params.width = WindowManager.LayoutParams.WRAP_CONTENT
                 params.height = WindowManager.LayoutParams.WRAP_CONTENT
+                params.gravity = Gravity.TOP or Gravity.START
+                params.x = lastBubbleX
+                params.y = lastBubbleY
                 params.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             }
             OverlayMode.MODAL -> {
-                params.width = WindowManager.LayoutParams.WRAP_CONTENT
-                params.height = WindowManager.LayoutParams.WRAP_CONTENT
+                params.width = WindowManager.LayoutParams.MATCH_PARENT
+                params.height = WindowManager.LayoutParams.MATCH_PARENT
+                params.gravity = Gravity.CENTER
+                params.x = 0
+                params.y = 0
                 params.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 params.flags = WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                 params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
@@ -212,6 +252,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             OverlayMode.FULLSCREEN_SIGNATURE -> {
                 params.width = WindowManager.LayoutParams.MATCH_PARENT
                 params.height = WindowManager.LayoutParams.MATCH_PARENT
+                params.gravity = Gravity.CENTER
                 params.x = 0
                 params.y = 0
                 params.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -229,6 +270,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
     override fun onCreate() {
         super.onCreate()
+        _isRunning.value = true
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
@@ -315,8 +357,20 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                 FloatingBubbleUI(
                     onDrag = { dx, dy ->
                         windowLayoutParams?.let { params ->
-                            params.x += dx.toInt()
-                            params.y += dy.toInt()
+                            val (screenWidth, screenHeight) = getScreenBounds()
+                            val viewWidth = this@apply.width.takeIf { it > 0 } ?: (56 * resources.displayMetrics.density).toInt()
+                            val viewHeight = this@apply.height.takeIf { it > 0 } ?: (56 * resources.displayMetrics.density).toInt()
+
+                            val maxX = (screenWidth - viewWidth).coerceAtLeast(0)
+                            val maxY = (screenHeight - viewHeight).coerceAtLeast(0)
+
+                            val newX = (params.x + dx.toInt()).coerceIn(0, maxX)
+                            val newY = (params.y + dy.toInt()).coerceIn(0, maxY)
+
+                            params.x = newX
+                            params.y = newY
+                            lastBubbleX = newX
+                            lastBubbleY = newY
                             try {
                                 windowManager?.updateViewLayout(this@apply, params)
                             } catch (e: Exception) {
@@ -365,8 +419,6 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         var isMultipleRecipientsModalOpen by remember { mutableStateOf(false) }
         var searchModalQuery by remember { mutableStateOf("") }
         var isSignatureFullScreen by remember { mutableStateOf(false) }
-        var showSignatureConfirmDialog by remember { mutableStateOf(false) }
-        var pendingActionOnConfirm by remember { mutableStateOf<(() -> Unit)?>(null) }
 
         // Form Fields for Editing / Registering in the Assistant
         var editingPersonId by remember { mutableStateOf<Long?>(null) }
@@ -467,74 +519,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         Box(
             modifier = if (isSignatureFullScreen) Modifier.fillMaxSize() else Modifier.padding(8.dp)
         ) {
-            if (showSignatureConfirmDialog) {
-                Card(
-                    modifier = Modifier
-                        .width(310.dp)
-                        .shadow(16.dp, RoundedCornerShape(16.dp)),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.Draw,
-                                contentDescription = null,
-                                tint = Color(0xFF2E7D32),
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Confirmar Envio da Assinatura",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                color = Color(0xFF1B5E20)
-                            )
-                        }
-
-                        Text(
-                            text = "Deseja desenhar a assinatura na tela do aplicativo de entregas agora?",
-                            fontSize = 12.sp,
-                            color = Color(0xFF424242)
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    showSignatureConfirmDialog = false
-                                    pendingActionOnConfirm = null
-                                    updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
-                                },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Text("Cancelar", fontSize = 11.sp)
-                            }
-
-                            Button(
-                                onClick = {
-                                    val action = pendingActionOnConfirm
-                                    showSignatureConfirmDialog = false
-                                    pendingActionOnConfirm = null
-                                    action?.invoke()
-                                },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                            ) {
-                                Text("Confirmar", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-            } else if (isSignatureFullScreen) {
+            if (isSignatureFullScreen) {
                 // TELA TODA DE ASSINATURA HORIZONTAL MÁXIMA
                 Box(
                     modifier = Modifier
@@ -858,14 +843,18 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                 val isMissingDocInForm = recipientDocument.isBlank()
                 val isMissingSigInForm = collectedSignatureData == null
 
-                Card(
-                    modifier = Modifier
-                        .width(330.dp)
-                        .shadow(16.dp, RoundedCornerShape(16.dp)),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
                 ) {
+                    Card(
+                        modifier = Modifier
+                            .width(330.dp)
+                            .shadow(16.dp, RoundedCornerShape(16.dp)),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+                    ) {
                     Column(
                         modifier = Modifier
                             .padding(16.dp)
@@ -1305,38 +1294,51 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                         Card(
                             modifier = Modifier
                                 .padding(16.dp)
-                                .fillMaxWidth(0.92f),
+                                .fillMaxWidth(0.96f),
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
                         ) {
                             Column(
-                                modifier = Modifier.padding(20.dp),
+                                modifier = Modifier.padding(18.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFE65100),
+                                    modifier = Modifier.size(32.dp)
+                                )
                                 Text(
                                     text = "Descartar alterações?",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 16.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                 )
                                 Text(
                                     text = "Você preencheu ou alterou informações que ainda não foram salvas. Tem certeza que deseja sair e perder as alterações?",
-                                    fontSize = 13.5.sp,
+                                    fontSize = 13.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                 )
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     OutlinedButton(
                                         onClick = { showDiscardEditConfirmDialog = false },
                                         modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        Text("Continuar")
+                                        Text(
+                                            text = "Continuar",
+                                            maxLines = 1,
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
                                     }
                                     Button(
                                         onClick = {
@@ -1345,10 +1347,17 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                             updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
                                         },
                                         modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        Text("Descartar", color = Color.White)
+                                        Text(
+                                            text = "Descartar",
+                                            color = Color.White,
+                                            maxLines = 1,
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
                             }
@@ -1367,13 +1376,13 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                         Card(
                             modifier = Modifier
                                 .padding(16.dp)
-                                .fillMaxWidth(0.92f),
+                                .fillMaxWidth(0.96f),
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
                         ) {
                             Column(
-                                modifier = Modifier.padding(20.dp),
+                                modifier = Modifier.padding(18.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
@@ -1387,24 +1396,31 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     text = "Limpar assinatura?",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 16.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                 )
                                 Text(
                                     text = "A assinatura gravada para este formulário será removida. Deseja continuar?",
-                                    fontSize = 13.5.sp,
+                                    fontSize = 13.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                 )
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     OutlinedButton(
                                         onClick = { showBubbleClearSigConfirmDialog = false },
                                         modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        Text("Cancelar")
+                                        Text(
+                                            text = "Cancelar",
+                                            maxLines = 1,
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
                                     }
                                     Button(
                                         onClick = {
@@ -1412,26 +1428,38 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                             showBubbleClearSigConfirmDialog = false
                                         },
                                         modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        Text("Sim, Limpar", fontWeight = FontWeight.Bold)
+                                        Text(
+                                            text = "Sim, Limpar",
+                                            color = Color.White,
+                                            maxLines = 1,
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
                             }
                         }
                     }
                 }
+            }
             } else if (isMultipleRecipientsModalOpen && availableRecebedores.size > 1) {
                 // MODAL DE SELEÇÃO DE MÚLTIPLOS RECEBEDORES
-                Card(
-                    modifier = Modifier
-                        .width(330.dp)
-                        .shadow(16.dp, RoundedCornerShape(16.dp)),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
                 ) {
+                    Card(
+                        modifier = Modifier
+                            .width(330.dp)
+                            .shadow(16.dp, RoundedCornerShape(16.dp)),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+                    ) {
                     Column(
                         modifier = Modifier
                             .padding(16.dp)
@@ -1565,6 +1593,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                         }
                     }
                 }
+            }
             } else if (automationState.isDrawingSignature) {
                 // Indicador Flutuante Compacto exibido enquanto a automação está desenhando a assinatura
                 Surface(
@@ -2204,21 +2233,11 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             if (hasSignature) {
                                 Button(
                                     onClick = {
-                                        val performDraw = {
-                                            if (appSettings.vibrationEnabled) {
-                                                triggerHapticFeedback()
-                                            }
-                                            isExpanded = false
-                                            executeSignatureDrawing(person.assinatura)
+                                        if (appSettings.vibrationEnabled) {
+                                            triggerHapticFeedback()
                                         }
-
-                                        if (appSettings.confirmBeforeSendSignature) {
-                                            pendingActionOnConfirm = performDraw
-                                            showSignatureConfirmDialog = true
-                                            updateWindowLayoutMode(OverlayMode.MODAL)
-                                        } else {
-                                            performDraw()
-                                        }
+                                        isExpanded = false
+                                        executeSignatureDrawing(person.assinatura)
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2282,26 +2301,16 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 if (hasSignature) {
                                     OutlinedButton(
                                         onClick = {
-                                            val performFillAndSign = {
-                                                if (appSettings.vibrationEnabled) {
-                                                    triggerHapticFeedback()
-                                                }
-                                                isExpanded = false
-                                                val res = AccessibilityAutomationEngine.fillFields(
-                                                    person.nome,
-                                                    person.documento
-                                                )
-                                                Toast.makeText(this@FloatingBubbleService, res.message, Toast.LENGTH_SHORT).show()
-                                                executeSignatureDrawing(person.assinatura)
+                                            if (appSettings.vibrationEnabled) {
+                                                triggerHapticFeedback()
                                             }
-
-                                            if (appSettings.confirmBeforeSendSignature) {
-                                                pendingActionOnConfirm = performFillAndSign
-                                                showSignatureConfirmDialog = true
-                                                updateWindowLayoutMode(OverlayMode.MODAL)
-                                            } else {
-                                                performFillAndSign()
-                                            }
+                                            isExpanded = false
+                                            val res = AccessibilityAutomationEngine.fillFields(
+                                                person.nome,
+                                                person.documento
+                                            )
+                                            Toast.makeText(this@FloatingBubbleService, res.message, Toast.LENGTH_SHORT).show()
+                                            executeSignatureDrawing(person.assinatura)
                                         },
                                         modifier = Modifier.weight(1.3f).height(32.dp),
                                         shape = RoundedCornerShape(8.dp),
@@ -2403,9 +2412,16 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
     }
 
     override fun onDestroy() {
+        _isRunning.value = false
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                DeliveryApp.instance.settingsRepository.setBubbleEnabled(false)
+            } catch (_: Exception) {}
+        }
 
         if (floatingView != null && windowManager != null) {
             try {
@@ -2422,5 +2438,8 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
     companion object {
         private const val NOTIFICATION_ID = 1001
         const val ACTION_STOP = "com.example.service.STOP_BUBBLE"
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+        fun isServiceRunning(): Boolean = _isRunning.value
     }
 }

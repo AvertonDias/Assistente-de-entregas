@@ -239,18 +239,22 @@ object AddressNormalizer {
     }
 
     /**
-     * Capitaliza a primeira letra de cada palavra (Title Case).
-     * Ex: "maria da silva santos" -> "Maria Da Silva Santos"
+     * Capitaliza a primeira letra de cada palavra (Title Case), mantendo preposições (da, de, do, das, dos, e, du) em minúsculo no meio do nome.
+     * Ex: "FULANO DA SILVA" -> "Fulano da Silva"
      */
     fun capitalizeWords(input: String): String {
         if (input.isBlank()) return input
-        return input.split(" ").joinToString(" ") { word ->
-            if (word.isNotEmpty()) {
-                word.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
+        val particles = setOf("da", "de", "do", "das", "dos", "du", "e")
+        val words = input.trim().split(Regex("\\s+"))
+        return words.mapIndexed { index, word ->
+            if (word.isEmpty()) return@mapIndexed ""
+            val lowerWord = word.lowercase(Locale.getDefault())
+            if (index > 0 && particles.contains(lowerWord)) {
+                lowerWord
             } else {
-                ""
+                lowerWord.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
             }
-        }
+        }.joinToString(" ")
     }
 
     fun levenshteinDistance(s1: String, s2: String): Int {

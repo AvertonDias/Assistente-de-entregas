@@ -320,23 +320,6 @@ fun SettingsScreen(
                             onCheckedChange = { scope.launch { settingsRepository.setVibrationEnabled(it) } }
                         )
                     }
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Confirmar antes de Enviar Assinatura", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                            Text("Evita envio acidental de gestos", fontSize = 11.sp, color = Color.Gray)
-                        }
-                        Switch(
-                            checked = settings.confirmBeforeSendSignature,
-                            onCheckedChange = { scope.launch { settingsRepository.setConfirmBeforeSendSignature(it) } }
-                        )
-                    }
                 }
             }
 
