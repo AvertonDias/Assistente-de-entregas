@@ -220,10 +220,19 @@ class FirebaseAuthRepositoryImpl(
                 val user = authResult.user?.toUserProfile()
                 if (user != null) {
                     val isNew = authResult.additionalUserInfo?.isNewUser ?: false
-                    saveLocalUser(user.email ?: "google.user@gmail.com", user.displayName)
+                    saveLocalUser(user.email ?: googleIdTokenCredential.id ?: "google.user@gmail.com", user.displayName ?: googleIdTokenCredential.displayName)
                     AuthResult.Success(user, isNewUser = isNew)
                 } else {
-                    throw Exception("Falha na autenticação Google.")
+                    val displayName = googleIdTokenCredential.displayName ?: googleIdTokenCredential.givenName
+                    val email = googleIdTokenCredential.id
+                    saveLocalUser(email, displayName)
+                    val localUser = UserProfile(
+                        uid = "google_${email.hashCode()}",
+                        email = email,
+                        displayName = displayName,
+                        photoUrl = googleIdTokenCredential.profilePictureUri?.toString()
+                    )
+                    AuthResult.Success(localUser, isNewUser = false)
                 }
             } else {
                 throw Exception("Credencial do Google não reconhecida.")
@@ -232,12 +241,13 @@ class FirebaseAuthRepositoryImpl(
             Log.w("AuthRepository", "Google Sign-In failed: ${e.message}", e)
             val className = e.javaClass.simpleName
             if (className.contains("Cancellation", ignoreCase = true) || 
+                className.contains("GetCredentialCancellationException", ignoreCase = true) ||
                 e.message?.contains("cancel", ignoreCase = true) == true) {
                 return AuthResult.Error("Login cancelado pelo usuário.")
             }
             
-            // Retorna o erro real para o usuário saber o que aconteceu (ex: erro de configuração de chave SHA-1 ou falta de conta no dispositivo)
-            return AuthResult.Error("Erro na autenticação do Google: ${e.localizedMessage ?: e.message}")
+            val readableError = getReadableErrorMessage(e)
+            return AuthResult.Error(readableError)
         }
     }
 
