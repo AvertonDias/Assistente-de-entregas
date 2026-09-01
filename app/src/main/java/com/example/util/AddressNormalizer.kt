@@ -193,9 +193,13 @@ object AddressNormalizer {
             return true
         }
 
-        // Extrai números
+        // 1. Extrai números
         val queryNumbers = extractNumbers(nQuery)
-        val targetNumbers = extractNumbers(nTarget)
+        val targetNumbers = if (targetNumber.isNotBlank()) {
+            extractNumbers(targetNumber).ifEmpty { extractNumbers(nTarget) }
+        } else {
+            extractNumbers(nTarget)
+        }
 
         // Se ambos têm números, DEVE haver número coincidente (ex: 450 == 450 ou 450A == 450)
         if (queryNumbers.isNotEmpty() && targetNumbers.isNotEmpty()) {
@@ -206,7 +210,19 @@ object AddressNormalizer {
                 }
             }
             if (!hasCommonNumber) {
-                // Números explicitamente diferentes (ex: casa 450 vs casa 120)
+                // Números explicitamente diferentes (ex: casa 450 vs casa 120 na mesma rua)
+                return false
+            }
+        } else if (queryNumbers.isNotEmpty() && targetNumbers.isEmpty()) {
+            // A consulta tem número específico na tela (ex: Rua Brasil, 500), mas o cadastro não tem número
+            // Não deve casar automaticamente com qualquer um se a tela tem número claro
+            return false
+        } else if (queryNumbers.isEmpty() && targetNumbers.isNotEmpty()) {
+            // Se a tela não tem número mas o cadastro tem número específico, evita falso positivo generalizado
+            // a não ser que a rua seja idêntica
+            val queryWords = extractStreetSignificantWords(nQuery)
+            val targetWords = extractStreetSignificantWords(nTarget)
+            if (queryWords != targetWords) {
                 return false
             }
         }

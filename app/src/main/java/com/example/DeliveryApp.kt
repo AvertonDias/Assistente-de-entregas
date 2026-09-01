@@ -39,10 +39,29 @@ class DeliveryApp : Application() {
         instance = this
         try {
             if (FirebaseApp.getApps(this).isEmpty()) {
-                FirebaseApp.initializeApp(this)
+                val app = FirebaseApp.initializeApp(this)
+                if (app == null) {
+                    val options = com.google.firebase.FirebaseOptions.Builder()
+                        .setApplicationId("1:946779143583:android:ea254adf31519413b591aa")
+                        .setApiKey("AIzaSyDKSJOuGg8nDr4HTiF9SXZcdYrl6FSeB0w")
+                        .setProjectId("assistente-de-entregas")
+                        .setStorageBucket("assistente-de-entregas.firebasestorage.app")
+                        .build()
+                    FirebaseApp.initializeApp(this, options)
+                }
             }
         } catch (e: Exception) {
-            Log.w("DeliveryApp", "Firebase initialization deferred: ${e.message}")
+            try {
+                val options = com.google.firebase.FirebaseOptions.Builder()
+                    .setApplicationId("1:946779143583:android:ea254adf31519413b591aa")
+                    .setApiKey("AIzaSyDKSJOuGg8nDr4HTiF9SXZcdYrl6FSeB0w")
+                    .setProjectId("assistente-de-entregas")
+                    .setStorageBucket("assistente-de-entregas.firebasestorage.app")
+                    .build()
+                FirebaseApp.initializeApp(this, options)
+            } catch (e2: Exception) {
+                Log.w("DeliveryApp", "Firebase initialization fallback error: ${e.message} / ${e2.message}")
+            }
         }
         com.example.util.CrashReporter.init(this)
     }

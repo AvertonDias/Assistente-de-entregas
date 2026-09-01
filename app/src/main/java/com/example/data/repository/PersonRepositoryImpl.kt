@@ -32,9 +32,16 @@ class PersonRepositoryImpl(
         if (all.isEmpty()) return emptyList()
 
         // Match preciso de endereço e número
+        val exactMatches = all.filter { p ->
+            AddressNormalizer.matchesPrecise(rawAddress, p.endereco, p.numero)
+        }
+        if (exactMatches.isNotEmpty()) {
+            return exactMatches
+        }
+
+        // Fallback apenas se não encontrou com endereço e número isolados
         return all.filter { p ->
-            AddressNormalizer.matchesPrecise(rawAddress, p.endereco, p.numero) ||
-            AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco} ${p.numero} ${p.bairro} ${p.cidade}", "")
+            AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero} ${p.bairro} ${p.cidade}", p.numero)
         }
     }
 

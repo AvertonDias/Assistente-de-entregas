@@ -1897,6 +1897,21 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                         )
                                     }
+                                } else if (automationState.isPausedScanning) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = Color(0xFFFFF3E0),
+                                        border = BorderStroke(0.5.dp, Color(0xFFFFB74D))
+                                    ) {
+                                        Text(
+                                            text = "⏸️ Pausado",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFE65100),
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                    }
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1908,7 +1923,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         modifier = Modifier
                                             .clickable {
                                                 AccessibilityAutomationEngine.clearDetectedAddress()
-                                                Toast.makeText(this@FloatingBubbleService, "Endereço limpo. Pronto para nova detecção.", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(this@FloatingBubbleService, "Pesquisa pausada. Clique nas setas 🔄 para buscar novamente.", Toast.LENGTH_SHORT).show()
                                             }
                                     ) {
                                         Row(
@@ -1935,7 +1950,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 IconButton(
                                     onClick = {
                                         AccessibilityAutomationEngine.rescanCurrentScreen(forceUnlock = true)
-                                        Toast.makeText(this@FloatingBubbleService, "Reescaneando tela...", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(this@FloatingBubbleService, "Buscando endereço na tela...", Toast.LENGTH_SHORT).show()
                                     },
                                     modifier = Modifier.size(24.dp)
                                 ) {
@@ -1949,7 +1964,11 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             }
                         }
                         Text(
-                            text = address.ifBlank { "Nenhum endereço detectado na tela." },
+                            text = if (automationState.isPausedScanning && address.isBlank()) {
+                                "Pesquisa pausada. Clique em 🔄 para pesquisar o endereço."
+                            } else {
+                                address.ifBlank { "Nenhum endereço detectado na tela." }
+                            },
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             color = if (address.isBlank()) Color.Gray else Color(0xFF212121),
