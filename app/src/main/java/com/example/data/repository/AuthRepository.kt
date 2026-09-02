@@ -218,16 +218,23 @@ class FirebaseAuthRepositoryImpl(
                 .setNonce(hashedNonce)
                 .build()
 
-            val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(clientId)
-                .setNonce(hashedNonce)
-                .build()
-
-            val request = GetCredentialRequest.Builder()
+            val primaryRequest = GetCredentialRequest.Builder()
                 .addCredentialOption(googleIdOption)
-                .addCredentialOption(signInWithGoogleOption)
                 .build()
 
-            val result = credentialManager.getCredential(context = context, request = request)
+            val result = try {
+                credentialManager.getCredential(context = context, request = primaryRequest)
+            } catch (primaryErr: Exception) {
+                // Se falhar ou não encontrar credencial rápida, tenta o fallback com GetSignInWithGoogleOption isolado
+                Log.w("AuthRepository", "Tentando fallback com GetSignInWithGoogleOption: ${primaryErr.message}")
+                val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(clientId)
+                    .setNonce(hashedNonce)
+                    .build()
+                val fallbackRequest = GetCredentialRequest.Builder()
+                    .addCredentialOption(signInWithGoogleOption)
+                    .build()
+                credentialManager.getCredential(context = context, request = fallbackRequest)
+            }
             val credential = result.credential
 
             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
