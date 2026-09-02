@@ -61,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
@@ -186,16 +187,18 @@ fun HomeScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = BentoBackgroundLight
+                    containerColor = MaterialTheme.colorScheme.background
                 )
             )
         }
     ) { innerPadding ->
+        val isModalOpen = showAppSelector || updateInfoAvailable != null
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(BentoBackgroundLight),
+                .background(MaterialTheme.colorScheme.background)
+                .blur(if (isModalOpen) 12.dp else 0.dp),
             contentAlignment = Alignment.TopCenter
         ) {
             LazyColumn(
@@ -259,7 +262,11 @@ fun HomeScreen(
                                     },
                                     colors = SwitchDefaults.colors(
                                         checkedThumbColor = BentoPrimary,
-                                        checkedTrackColor = Color.White
+                                        checkedTrackColor = Color.White,
+                                        checkedBorderColor = BentoPrimary,
+                                        uncheckedThumbColor = Color(0xFF475569),
+                                        uncheckedTrackColor = Color(0xFFE2E8F0),
+                                        uncheckedBorderColor = Color(0xFF64748B)
                                     )
                                 )
                             }
@@ -362,8 +369,8 @@ fun HomeScreen(
                         .clickable { onNavigate(Screen.Diagnostic.route) }
                         .testTag("bento_card_diagnostic"),
                     shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = BentoSurfaceLight),
-                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BentoBorder))
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.outlineVariant))
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp),
@@ -376,12 +383,12 @@ fun HomeScreen(
                                 text = "Diagnóstico & Telemetria",
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = BentoTextPrimary
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = "Verifique o status dos serviços e logs de automação",
                                 fontSize = 12.sp,
-                                color = BentoTextSecondary
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -397,8 +404,8 @@ fun HomeScreen(
                         .clickable { onNavigate(Screen.Settings.route) }
                         .testTag("menu_tile_settings"),
                     shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = BentoSurfaceLight),
-                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BentoBorder))
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.outlineVariant))
                 ) {
                     Row(
                         modifier = Modifier.padding(18.dp),
@@ -411,12 +418,12 @@ fun HomeScreen(
                                 text = "Configurações & Backup",
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = BentoTextPrimary
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Tamanho do balão, feedback tátil e exportação JSON",
+                                text = "Tema OLED, feedback tátil e exportação JSON",
                                 fontSize = 12.sp,
-                                color = BentoTextSecondary
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -497,14 +504,17 @@ private fun BentoPillChip(
             .clip(RoundedCornerShape(99.dp))
             .clickable { onClick() },
         shape = RoundedCornerShape(99.dp),
-        color = Color.White.copy(alpha = 0.65f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE))
+        color = if (isActive) MaterialTheme.colorScheme.primaryContainer else Color.White,
+        border = androidx.compose.foundation.BorderStroke(
+            1.5.dp,
+            if (isActive) MaterialTheme.colorScheme.primary else Color(0xFF94A3B8)
+        )
     ) {
         Text(
             text = text,
             fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = if (isActive) BentoPrimaryDark else BentoTextSecondary,
+            fontWeight = FontWeight.Bold,
+            color = if (isActive) MaterialTheme.colorScheme.primary else Color(0xFF334155),
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             maxLines = 1
         )
@@ -526,8 +536,8 @@ private fun BentoModuleCard(
             .clickable { onClick() }
             .testTag("bento_card_${title.lowercase()}"),
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = BentoSurfaceLight),
-        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(BentoBorder))
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.outlineVariant))
     ) {
         Column(
             modifier = Modifier
@@ -541,12 +551,12 @@ private fun BentoModuleCard(
                     text = title,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
-                    color = BentoTextPrimary
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = subtitle,
                     fontSize = 11.sp,
-                    color = BentoTextSecondary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
             }

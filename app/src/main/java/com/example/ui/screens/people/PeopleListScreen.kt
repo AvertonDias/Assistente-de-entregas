@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -52,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -60,7 +62,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.entity.Person
+import com.example.data.model.Recebedor
+import com.example.ui.components.DialogBlurEffect
 import com.example.ui.navigation.Screen
+import com.example.util.AddressNormalizer
 import com.example.util.ClipboardHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -103,7 +108,8 @@ fun PeopleListScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.background),
+                .background(MaterialTheme.colorScheme.background)
+                .blur(if (personToDelete != null) 12.dp else 0.dp),
             contentAlignment = Alignment.TopCenter
         ) {
             Column(
@@ -196,7 +202,10 @@ fun PeopleListScreen(
         if (personToDelete != null) {
             AlertDialog(
                 onDismissRequest = { personToDelete = null },
-                title = { Text("Excluir Cadastro") },
+                title = {
+                    DialogBlurEffect()
+                    Text("Excluir Cadastro")
+                },
                 text = { Text("Deseja realmente excluir o cadastro de ${personToDelete?.nome}? Esta ação não pode ser desfeita.") },
                 confirmButton = {
                     TextButton(
@@ -227,17 +236,22 @@ private fun PersonCardItem(
     onCopyDoc: () -> Unit
 ) {
     val context = LocalContext.current
-    val addressTitle = remember(person.endereco, person.numero, person.bairro) {
-        val base = person.endereco.trim()
-        val num = person.numero.trim()
-        val neighborhood = person.bairro.trim()
-        val addr = when {
-            base.isNotBlank() && num.isNotBlank() -> "$base, $num"
-            base.isNotBlank() -> base
-            num.isNotBlank() -> "Nº $num"
-            else -> "Sem endereço cadastrado"
+    val parsedAddress = remember(person.endereco, person.numero, person.complemento, person.bairro) {
+        AddressNormalizer.parseAddressComponents(
+            person.endereco,
+            person.numero,
+            person.complemento,
+            person.bairro
+        )
+    }
+
+    val allRecebedores = remember(person) {
+        val list = mutableListOf<Recebedor>()
+        if (person.nome.isNotBlank() || person.documento.isNotBlank()) {
+            list.add(Recebedor(id = "main", nome = person.nome, documento = person.documento, assinatura = person.assinatura))
         }
-        if (neighborhood.isNotBlank() && base.isNotBlank()) "$addr - $neighborhood" else addr
+        list.addAll(Recebedor.listFromJson(person.coRecebedoresJson))
+        list
     }
 
     Card(
@@ -249,31 +263,89 @@ private fun PersonCardItem(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            // TÍTULO PRINCIPAL: ENDEREÇO
+            // TÍTULO PRINCIPAL: ENDEREÇO COM DESTAQUE PARA NÚMERO E UNIDADE (APTO / BLOCO / CASA)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top
             ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = addressTitle,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LocationOn,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = parsedAddress.street.ifBlank { "Sem logradouro" },
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // BADGES DE DESTAQUE: NÚMERO E COMPLEMENTO / UNIDADE
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp, start = 26.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (parsedAddress.number.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                                )
+                            ) {
+                                Text(
+                                    text = "Nº ${parsedAddress.number}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        if (parsedAddress.hasComplement) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)
+                                )
+                            ) {
+                                Text(
+                                    text = parsedAddress.unitBadgeText,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        if (parsedAddress.neighborhood.isNotBlank()) {
+                            Text(
+                                text = "• ${parsedAddress.neighborhood}",
+                                fontSize = 11.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
 
                 Row {
@@ -286,69 +358,191 @@ private fun PersonCardItem(
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // DESTINATÁRIO (NOME) ABAIXO DO ENDEREÇO
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Person,
-                    contentDescription = null,
-                    tint = Color.Gray,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = person.nome.ifBlank { "Sem nome cadastrado" },
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            // LISTA DE TODOS OS DESTINATÁRIOS / MORADORES CADASTRADOS NESTE ENDEREÇO
+            if (allRecebedores.isNotEmpty()) {
+                if (allRecebedores.size > 1) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.People,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "${allRecebedores.size} moradores/destinatários cadastrados:",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
 
-            // DOCUMENTO
-            if (person.documento.isNotBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Doc: ${person.documento}",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 22.dp)
-                )
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    allRecebedores.forEachIndexed { index, rec ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (allRecebedores.size > 1) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) else Color.Transparent,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(if (allRecebedores.size > 1) 8.dp else 0.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Person,
+                                            contentDescription = null,
+                                            tint = if (index == 0) MaterialTheme.colorScheme.primary else Color.Gray,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = rec.nome.ifBlank { "Sem nome cadastrado" },
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        if (index == 0 && allRecebedores.size > 1) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                            ) {
+                                                Text(
+                                                    text = "Principal",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // Indicador de assinatura
+                                    if (rec.assinatura.isNotBlank()) {
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = Color(0xFFE8F5E9)
+                                        ) {
+                                            Text(
+                                                text = "✓ Assinado",
+                                                fontSize = 9.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF2E7D32),
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (rec.documento.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Doc: ${rec.documento}",
+                                        fontSize = 12.5.sp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.padding(start = 22.dp)
+                                    )
+                                }
+
+                                // Botões de copiar para este recebedor específico
+                                if (allRecebedores.size > 1) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 22.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        if (rec.nome.isNotBlank()) {
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = MaterialTheme.colorScheme.surface,
+                                                modifier = Modifier.clickable {
+                                                    ClipboardHelper.copyToClipboard(context, "Nome", rec.nome)
+                                                }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(10.dp))
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text("Copiar Nome", fontSize = 10.sp)
+                                                }
+                                            }
+                                        }
+                                        if (rec.documento.isNotBlank()) {
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = MaterialTheme.colorScheme.surface,
+                                                modifier = Modifier.clickable {
+                                                    ClipboardHelper.copyToClipboard(context, "Documento", rec.documento)
+                                                }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(10.dp))
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text("Copiar Doc", fontSize = 10.sp)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        tint = Color.Gray,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Sem destinatário cadastrado",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // BOTÕES DE AÇÃO RÁPIDA
+            // BOTÕES DE AÇÃO RÁPIDA GERAIS
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable { onCopyName() }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(vertical = 6.dp, horizontal = 8.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(12.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Copiar Nome", fontSize = 11.sp)
-                    }
-                }
-
-                if (person.documento.isNotBlank()) {
+                if (allRecebedores.size <= 1) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         modifier = Modifier
                             .weight(1f)
-                            .clickable { onCopyDoc() }
+                            .clickable { onCopyName() }
                     ) {
                         Row(
                             modifier = Modifier.padding(vertical = 6.dp, horizontal = 8.dp),
@@ -357,19 +551,39 @@ private fun PersonCardItem(
                         ) {
                             Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(12.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Copiar Doc", fontSize = 11.sp)
+                            Text("Copiar Nome", fontSize = 11.sp)
+                        }
+                    }
+
+                    if (person.documento.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onCopyDoc() }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(vertical = 6.dp, horizontal = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(12.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Copiar Doc", fontSize = 11.sp)
+                            }
                         }
                     }
                 }
 
-                if (addressTitle != "Sem endereço cadastrado") {
+                if (parsedAddress.street.isNotBlank() || parsedAddress.number.isNotBlank()) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         modifier = Modifier
                             .weight(1f)
                             .clickable {
-                                ClipboardHelper.copyToClipboard(context, "Endereço", addressTitle)
+                                ClipboardHelper.copyToClipboard(context, "Endereço", parsedAddress.fullDisplay)
                             }
                     ) {
                         Row(

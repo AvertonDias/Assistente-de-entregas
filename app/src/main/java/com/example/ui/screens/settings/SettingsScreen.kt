@@ -46,6 +46,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -79,8 +80,15 @@ import com.example.util.AppUpdateInfo
 import com.example.ui.components.UpdateDialog
 import com.example.BuildConfig
 import androidx.compose.material.icons.filled.CropFree
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.BrightnessAuto
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Info
+import com.example.util.FeedbackHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -275,7 +283,15 @@ fun SettingsScreen(
                         }
                         Switch(
                             checked = settings.isCompactMode,
-                            onCheckedChange = { scope.launch { settingsRepository.setCompactMode(it) } }
+                            onCheckedChange = { scope.launch { settingsRepository.setCompactMode(it) } },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                                uncheckedThumbColor = Color(0xFF475569),
+                                uncheckedTrackColor = Color(0xFFE2E8F0),
+                                uncheckedBorderColor = Color(0xFF64748B)
+                            )
                         )
                     }
 
@@ -291,34 +307,147 @@ fun SettingsScreen(
                 }
             }
 
-            // Seção de Feedback & Confirmações
+            // Seção de Aparência & Tema (Dark Mode)
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().testTag("theme_settings_card"),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "FEEDBACK & SEGURANÇA",
+                        text = "APARÊNCIA & TEMA",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "O aplicativo está configurado exclusivamente para o Modo Claro.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { scope.launch { settingsRepository.setThemeMode("LIGHT") } },
+                            modifier = Modifier.fillMaxWidth().height(44.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        ) {
+                            Icon(Icons.Default.LightMode, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Modo Claro Ativo", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            // Seção de Feedback Tátil & Sonoro
+            Card(
+                modifier = Modifier.fillMaxWidth().testTag("feedback_settings_card"),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "FEEDBACK TÁTIL & SONORO",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Receba confirmação imediata de sucesso ao preencher dados e ao assinar sem precisar desviar o olhar da rua.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Vibração
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Vibração ao Preencher", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                            Text("Feedback tátil durante ações", fontSize = 11.sp, color = Color.Gray)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Feedback Háptico (Vibração)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            Text("Vibração suave de confirmação ao preencher ou assinar", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = settings.vibrationEnabled,
-                            onCheckedChange = { scope.launch { settingsRepository.setVibrationEnabled(it) } }
+                            onCheckedChange = { scope.launch { settingsRepository.setVibrationEnabled(it) } },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                                uncheckedThumbColor = Color(0xFF475569),
+                                uncheckedTrackColor = Color(0xFFE2E8F0),
+                                uncheckedBorderColor = Color(0xFF64748B)
+                            )
                         )
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+
+                    // Som
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.VolumeUp, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Feedback Sonoro Sutil", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            Text("Som suave de confirmação de sucesso de preenchimento", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = settings.soundEnabled,
+                            onCheckedChange = { scope.launch { settingsRepository.setSoundEnabled(it) } },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                                uncheckedThumbColor = Color(0xFF475569),
+                                uncheckedTrackColor = Color(0xFFE2E8F0),
+                                uncheckedBorderColor = Color(0xFF64748B)
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Botão de Teste de Feedback
+                    OutlinedButton(
+                        onClick = {
+                            FeedbackHelper.triggerSuccess(
+                                context = context,
+                                vibrationEnabled = settings.vibrationEnabled,
+                                soundEnabled = settings.soundEnabled
+                            )
+                            Toast.makeText(context, "Feedback testado com sucesso!", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.fillMaxWidth().height(38.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Testar Feedback de Sucesso Agora", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }

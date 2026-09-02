@@ -68,12 +68,12 @@ fun SignatureScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F172A))
+            .background(Color(0xFFF8FAFC))
     ) {
         SignatureCanvas(
             modifier = Modifier.fillMaxSize(),
             initialSignature = savedSignature,
-            isDarkTheme = true,
+            isDarkTheme = false,
             onSignatureConfirmed = { signatureData ->
                 savedSignature = signatureData
                 scope.launch {

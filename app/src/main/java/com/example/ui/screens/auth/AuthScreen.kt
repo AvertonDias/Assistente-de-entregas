@@ -58,7 +58,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -495,64 +498,19 @@ fun AuthScreen(
 
 @Composable
 fun GoogleLogoCanvas(modifier: Modifier = Modifier) {
+    val bluePath = remember { PathParser().parsePathString("M23.49 12.275c0-.852-.075-1.678-.218-2.475H12v4.688h6.448a5.511 5.511 0 0 1-2.36 3.583v2.973h3.82c2.235-2.057 3.582-5.085 3.582-8.769z").toPath() }
+    val greenPath = remember { PathParser().parsePathString("M12 24c3.24 0 5.952-1.073 7.936-2.911l-3.82-2.973c-1.075.72-2.45 1.157-4.116 1.157-3.16 0-5.839-2.134-6.795-5.013H1.284v3.062C3.253 21.22 7.31 24 12 24z").toPath() }
+    val yellowPath = remember { PathParser().parsePathString("M5.205 14.26a7.196 7.196 0 0 1 0-4.52V6.677H1.284a11.982 11.982 0 0 0 0 10.644l3.921-3.061z").toPath() }
+    val redPath = remember { PathParser().parsePathString("M12 4.75c1.762 0 3.348.606 4.593 1.794l3.445-3.445C17.947 1.19 15.236 0 12 0 7.31 0 3.253 2.78 1.284 6.677l3.92 3.062c.957-2.879 3.636-5.013 6.796-5.013z").toPath() }
+
     androidx.compose.foundation.Canvas(modifier = modifier) {
-        val width = size.width
-        val height = size.height
-        val radius = width.coerceAtMost(height) / 2f
-        val center = androidx.compose.ui.geometry.Offset(width / 2f, height / 2f)
-
-        val blue = Color(0xFF4285F4)
-        val red = Color(0xFFEA4335)
-        val yellow = Color(0xFFFBBC05)
-        val green = Color(0xFF34A853)
-
-        val strokeWidth = radius * 0.42f
-        val arcSize = androidx.compose.ui.geometry.Size(radius * 2 - strokeWidth, radius * 2 - strokeWidth)
-        val arcTopLeft = androidx.compose.ui.geometry.Offset(center.x - radius + strokeWidth / 2, center.y - radius + strokeWidth / 2)
-        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidth)
-
-        drawArc(
-            color = blue,
-            startAngle = -45f,
-            sweepAngle = 90f,
-            useCenter = false,
-            topLeft = arcTopLeft,
-            size = arcSize,
-            style = stroke
-        )
-        drawArc(
-            color = green,
-            startAngle = 45f,
-            sweepAngle = 90f,
-            useCenter = false,
-            topLeft = arcTopLeft,
-            size = arcSize,
-            style = stroke
-        )
-        drawArc(
-            color = yellow,
-            startAngle = 135f,
-            sweepAngle = 90f,
-            useCenter = false,
-            topLeft = arcTopLeft,
-            size = arcSize,
-            style = stroke
-        )
-        drawArc(
-            color = red,
-            startAngle = 225f,
-            sweepAngle = 90f,
-            useCenter = false,
-            topLeft = arcTopLeft,
-            size = arcSize,
-            style = stroke
-        )
-
-        val barHeight = strokeWidth * 0.95f
-        drawRect(
-            color = blue,
-            topLeft = androidx.compose.ui.geometry.Offset(center.x - strokeWidth * 0.1f, center.y - barHeight / 2),
-            size = androidx.compose.ui.geometry.Size(radius - strokeWidth * 0.05f, barHeight)
-        )
+        val scaleX = size.width / 24f
+        val scaleY = size.height / 24f
+        scale(scaleX, scaleY, pivot = Offset.Zero) {
+            drawPath(bluePath, Color(0xFF4285F4))
+            drawPath(greenPath, Color(0xFF34A853))
+            drawPath(yellowPath, Color(0xFFFBBC05))
+            drawPath(redPath, Color(0xFFEA4335))
+        }
     }
 }

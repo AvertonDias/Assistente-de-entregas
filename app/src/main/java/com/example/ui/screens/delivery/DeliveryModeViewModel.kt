@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.accessibility.AccessibilityAutomationEngine
 import com.example.data.local.entity.Delivery
 import com.example.data.local.entity.Person
+import com.example.data.model.Recebedor
 import com.example.data.model.SignatureData
 import com.example.data.repository.DeliveryRepository
 import com.example.data.repository.PersonRepository
@@ -22,6 +23,8 @@ data class DeliveryModeState(
     val currentAddress: String = "",
     val selectedPerson: Person? = null,
     val candidatePersons: List<Person> = emptyList(),
+    val availableRecebedores: List<Recebedor> = emptyList(),
+    val selectedRecebedor: Recebedor? = null,
     val currentSignature: SignatureData? = null,
     val isSearching: Boolean = false,
     val nameFilled: Boolean = false,
@@ -47,9 +50,20 @@ class DeliveryModeViewModel(
                     _state.value = _state.value.copy(currentAddress = autoState.detectedAddressText)
                 }
                 if (autoState.matchedPerson != null && _state.value.selectedPerson == null) {
+                    val recebedores = autoState.availableRecebedores.ifEmpty {
+                        AccessibilityAutomationEngine.extractAllRecebedores(autoState.candidatePersons)
+                    }
+                    val currentSig = autoState.selectedRecebedor?.assinatura?.let {
+                        if (it.isNotBlank()) SignatureData.fromJson(it) else null
+                    } ?: autoState.matchedPerson?.assinatura?.let {
+                        if (it.isNotBlank()) SignatureData.fromJson(it) else null
+                    }
                     _state.value = _state.value.copy(
                         selectedPerson = autoState.matchedPerson,
-                        candidatePersons = autoState.candidatePersons
+                        candidatePersons = autoState.candidatePersons,
+                        availableRecebedores = recebedores,
+                        selectedRecebedor = autoState.selectedRecebedor ?: recebedores.firstOrNull(),
+                        currentSignature = currentSig
                     )
                 }
             }
@@ -64,29 +78,78 @@ class DeliveryModeViewModel(
     fun searchPersonsForAddress(address: String) {
         viewModelScope.launch {
             if (address.isBlank()) {
-                _state.value = _state.value.copy(candidatePersons = emptyList())
+                _state.value = _state.value.copy(
+                    candidatePersons = emptyList(),
+                    availableRecebedores = emptyList(),
+                    selectedPerson = null,
+                    selectedRecebedor = null,
+                    currentSignature = null
+                )
                 return@launch
             }
             _state.value = _state.value.copy(isSearching = true)
             val results = personRepository.findPersonsByAddress(address)
+            val recebedores = AccessibilityAutomationEngine.extractAllRecebedores(results)
+            val firstRec = recebedores.firstOrNull()
+            val firstPerson = results.firstOrNull()
+            val sig = firstRec?.assinatura?.let {
+                if (it.isNotBlank()) SignatureData.fromJson(it) else null
+            } ?: firstPerson?.assinatura?.let {
+                if (it.isNotBlank()) SignatureData.fromJson(it) else null
+            }
+
             _state.value = _state.value.copy(
                 isSearching = false,
                 candidatePersons = results,
-                selectedPerson = results.firstOrNull()
+                availableRecebedores = recebedores,
+                selectedPerson = firstPerson,
+                selectedRecebedor = firstRec,
+                currentSignature = sig
             )
         }
     }
 
     fun selectPerson(person: Person) {
+        val recebedores = AccessibilityAutomationEngine.extractAllRecebedores(listOf(person))
+        val rec = recebedores.firstOrNull()
+        val sig = rec?.assinatura?.let {
+            if (it.isNotBlank()) SignatureData.fromJson(it) else null
+        } ?: person.assinatura.let {
+            if (it.isNotBlank()) SignatureData.fromJson(it) else null
+        }
         _state.value = _state.value.copy(
             selectedPerson = person,
+            selectedRecebedor = rec,
+            currentSignature = sig,
             currentAddress = if (_state.value.currentAddress.isBlank()) "${person.endereco}, ${person.numero}" else _state.value.currentAddress
         )
     }
 
+    fun selectRecebedor(recebedor: Recebedor) {
+        val personId = recebedor.id.removePrefix("p_").substringBefore("_").toLongOrNull()
+        val parentPerson = if (personId != null) {
+            _state.value.candidatePersons.firstOrNull { it.id == personId } ?: _state.value.selectedPerson
+        } else {
+            _state.value.selectedPerson
+        }
+        val sig = if (recebedor.assinatura.isNotBlank()) {
+            SignatureData.fromJson(recebedor.assinatura)
+        } else if (parentPerson?.assinatura?.isNotBlank() == true) {
+            SignatureData.fromJson(parentPerson.assinatura)
+        } else null
+
+        _state.value = _state.value.copy(
+            selectedRecebedor = recebedor,
+            selectedPerson = parentPerson,
+            currentSignature = sig
+        )
+        AccessibilityAutomationEngine.selectRecebedor(recebedor)
+    }
+
     fun fillFields(): String {
-        val person = _state.value.selectedPerson ?: return "Nenhuma pessoa selecionada para preenchimento."
-        val result = AccessibilityAutomationEngine.fillFields(person.nome, person.documento)
+        val activeName = _state.value.selectedRecebedor?.nome ?: _state.value.selectedPerson?.nome ?: return "Nenhuma pessoa selecionada para preenchimento."
+        val activeDoc = _state.value.selectedRecebedor?.documento ?: _state.value.selectedPerson?.documento ?: ""
+        val result = AccessibilityAutomationEngine.fillFields(activeName, activeDoc)
         _state.value = _state.value.copy(
             nameFilled = result.nameFilled || _state.value.nameFilled,
             documentFilled = result.documentFilled || _state.value.documentFilled,
@@ -110,10 +173,11 @@ class DeliveryModeViewModel(
     fun finishDelivery(onFinished: (Long) -> Unit) {
         val current = _state.value
         val person = current.selectedPerson
+        val activeRec = current.selectedRecebedor
         val delivery = Delivery(
             pessoaId = person?.id,
-            nomeDestinatario = person?.nome ?: "Destinatário Direto",
-            documentoDestinatario = person?.documento ?: "",
+            nomeDestinatario = activeRec?.nome ?: person?.nome ?: "Destinatário Direto",
+            documentoDestinatario = activeRec?.documento ?: person?.documento ?: "",
             endereco = current.currentAddress.ifBlank { person?.let { "${it.endereco}, ${it.numero}" } ?: "Endereço não informado" },
             dataHora = System.currentTimeMillis(),
             observacao = current.observation,

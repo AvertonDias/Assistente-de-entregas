@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,10 +27,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -203,39 +206,116 @@ fun DeliveryModeScreen(
                 }
             }
 
-            // Resultados de múltiplos candidatos se houver
-            if (state.candidatePersons.size > 1) {
+            // Resultados de múltiplos destinatários/recebedores se houver
+            if (state.availableRecebedores.size > 1) {
                 item {
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                text = "${state.candidatePersons.size} destinatários compatíveis encontrados:",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            state.candidatePersons.forEach { p ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { viewModel.selectPerson(p) }
-                                        .padding(vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.People,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "• ${p.nome} (${p.documento})",
+                                        text = "Destinatários neste endereço (${state.availableRecebedores.size}):",
                                         fontSize = 13.sp,
-                                        fontWeight = if (p.id == state.selectedPerson?.id) FontWeight.Bold else FontWeight.Normal,
+                                        fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
-                                    if (p.id == state.selectedPerson?.id) {
-                                        Text("Selecionado", fontSize = 11.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
+                                }
+                                Text(
+                                    text = "Toque para alternar",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                state.availableRecebedores.forEach { r ->
+                                    val isSelected = r.id == state.selectedRecebedor?.id
+                                    val hasDoc = r.documento.isNotBlank()
+                                    val hasSig = r.assinatura.isNotBlank()
+
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                                        border = BorderStroke(
+                                            width = if (isSelected) 1.5.dp else 1.dp,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { viewModel.selectRecebedor(r) }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(10.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Person,
+                                                    contentDescription = null,
+                                                    tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Column {
+                                                    Text(
+                                                        text = r.nome,
+                                                        fontSize = 13.5.sp,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = if (hasDoc) "Doc: ${r.documento}" else "Sem doc",
+                                                            fontSize = 11.sp,
+                                                            color = if (hasDoc) MaterialTheme.colorScheme.onSurfaceVariant else Color(0xFFD84315)
+                                                        )
+                                                        Text(
+                                                            text = if (hasSig) "✓ Assinado" else "Sem ass.",
+                                                            fontSize = 11.sp,
+                                                            color = if (hasSig) Color(0xFF2E7D32) else Color(0xFFE65100),
+                                                            fontWeight = if (hasSig) FontWeight.Normal else FontWeight.Bold
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            if (isSelected) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = Color(0xFFC8E6C9)
+                                                ) {
+                                                    Text(
+                                                        text = "ATIVO",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = Color(0xFF1B5E20),
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -244,7 +324,7 @@ fun DeliveryModeScreen(
                 }
             }
 
-            // Cartão de Destinatário Identificado
+            // Cartão de Destinatário Ativo / Selecionado
             item {
                 Card(
                     modifier = Modifier
@@ -260,12 +340,12 @@ fun DeliveryModeScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "DESTINATÁRIO",
+                                text = "DESTINATÁRIO SELECIONADO",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
                             )
-                            if (state.selectedPerson != null) {
+                            if (state.selectedRecebedor != null || state.selectedPerson != null) {
                                 Text(
                                     text = "✓ DESTINATÁRIO ENCONTRADO",
                                     fontSize = 11.sp,
@@ -277,16 +357,18 @@ fun DeliveryModeScreen(
 
                         Spacer(modifier = Modifier.height(6.dp))
 
-                        if (state.selectedPerson != null) {
-                            val person = state.selectedPerson!!
+                        val activeName = state.selectedRecebedor?.nome ?: state.selectedPerson?.nome
+                        val activeDoc = state.selectedRecebedor?.documento ?: state.selectedPerson?.documento
+
+                        if (!activeName.isNullOrBlank()) {
                             Text(
-                                text = person.nome,
+                                text = activeName,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Documento: ${person.documento.ifBlank { "Não informado" }}",
+                                text = "Documento: ${activeDoc?.ifBlank { "Não informado" } ?: "Não informado"}",
                                 fontSize = 14.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

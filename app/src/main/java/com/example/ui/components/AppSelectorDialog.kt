@@ -72,6 +72,7 @@ fun AppSelectorDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
+            DialogBlurEffect()
             Column {
                 Text("Escolher App para Desenhar", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 Text("Selecione o app que será aberto para você desenhar o alvo:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

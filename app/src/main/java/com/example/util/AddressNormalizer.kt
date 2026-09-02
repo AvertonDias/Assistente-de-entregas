@@ -6,6 +6,313 @@ import java.util.regex.Pattern
 
 object AddressNormalizer {
 
+    data class AddressComponents(
+        val street: String,
+        val number: String,
+        val complement: String,
+        val neighborhood: String = "",
+        val cityState: String = ""
+    ) {
+        val fullDisplay: String
+            get() = buildString {
+                append(street.ifBlank { "Sem logradouro" })
+                if (number.isNotBlank()) append(", $number")
+                if (complement.isNotBlank()) append(" - $complement")
+                if (neighborhood.isNotBlank()) append(" ($neighborhood)")
+            }
+
+        val hasComplement: Boolean
+            get() = complement.isNotBlank()
+
+        val unitBadgeText: String
+            get() {
+                if (complement.isBlank()) return ""
+                val lower = complement.lowercase(Locale.ROOT)
+                return when {
+                    lower.contains("ap") -> "🏢 $complement"
+                    lower.contains("bl") -> "🏢 $complement"
+                    lower.contains("casa") || lower.contains("cs") -> "🏠 $complement"
+                    lower.contains("sala") || lower.contains("sl") -> "💼 $complement"
+                    lower.contains("qd") || lower.contains("lt") -> "📍 $complement"
+                    else -> "🏷️ $complement"
+                }
+            }
+    }
+
+    // Static pre-compiled Regex constants to avoid allocation overhead during list processing & searches
+    private val MULTIPLE_SPACES_REGEX = Regex("""\s+""")
+    private val REGEX_HEADER_PREFIXES = Regex("""(?i)^(Próxima\s+entrega|Proxima\s+entrega|Endereço|Endereco|Destino|Entrega|Para|Destinatário):?\s*""")
+    private val REGEX_DATE_TRAIL = Regex("""\s*\d{2}/\d{2}/\d{4}.*""")
+    private val REGEX_PARENTHESES = Regex("""\s*\(.*?\)""")
+    private val REGEX_NUMBERS_EXTRACT = Regex("""(?:nº|n°|n\.|n|º|°|numero|num)?\s*(\b\d+[A-Za-z]?\b)""", RegexOption.IGNORE_CASE)
+    private val REGEX_NUM_MATCH = Regex("""\b\d+[A-Za-z]?\b""")
+    private val REGEX_PUNCT_SPLIT = Regex("""[,;\-_/]+""")
+    private val REGEX_CLEAN_STREET_WORDS = Regex("""(?i)(nº|n°|n\.|numero|num)""")
+    private val REGEX_BLOCK_MATCH = Regex("""\b(?:BLOCO|BL|BLO)\s*([A-Z0-9]+)\b""")
+    private val REGEX_UNIT_MATCH = Regex("""\b(?:APTO|APT|AP|APARTAMENTO|CASA|CS|SALA|SL|LOJA|TORRE|TR)\s*([0-9]+)\b""")
+    private val REGEX_LOGRADOURO = Regex("""((?:Rua|R\.|Av\.|Avenida|Alameda|Al\.|Praça|Praca|Pca\.|Pr\.|Travessa|Trav\.|Tv\.|Rodovia|Rod\.|Estrada|Est\.|Beco|Viela)\s+[^,\n;]+?,?\s*(?:nº|n°|n\.|n|º|°|numero|num)?\s*(\d+[A-Za-z]?))""", RegexOption.IGNORE_CASE)
+    private val REGEX_STREET_NUMBER = Regex("""^([^,\n;-]+?),?\s*(?:nº|n°|n\.|n|º|°|numero|num)?\s*(\d+[A-Za-z]?)""", RegexOption.IGNORE_CASE)
+    private val REGEX_STREET_NUM_START = Regex("""\b\d+.*""")
+    private val REGEX_DIACRITICS = Regex("""\p{InCombiningDiacriticalMarks}+""")
+    private val REGEX_PUNCTUATION_NORM = Regex("""[,.\-/_#()ºª;]""")
+    private val REGEX_APTO_REPLACE = Regex("""(?i)^(apartamento|apto|apt|ap)\.?\s*""")
+    private val REGEX_BLOCO_REPLACE = Regex("""(?i)^(bloco|blo|bl)\.?\s*""")
+    private val REGEX_TORRE_REPLACE = Regex("""(?i)^(torre|tor|tr)\.?\s*""")
+    private val REGEX_CASA_REPLACE = Regex("""(?i)^(casa|cs)\.?\s*""")
+    private val REGEX_SALA_REPLACE = Regex("""(?i)^(sala|sl)\.?\s*""")
+    private val REGEX_QUADRA_REPLACE = Regex("""(?i)^(quadra|qd)\.?\s*""")
+    private val REGEX_LOTE_REPLACE = Regex("""(?i)^(lote|lt)\.?\s*""")
+
+    private val COMPLEMENT_PATTERN = Regex(
+        """(?i)\b(?:(bloco|bl|blo)\.?\s*([0-9a-z\-]+)|(apartamento|apto|apt|ap)\.?\s*([0-9a-z\-]+)|(torre|tor|tr)\.?\s*([0-9a-z\-]+)|(casa|cs)\.?\s*([0-9a-z\-]+)|(sala|sl)\.?\s*([0-9a-z\-]+)|(conjunto|conj|cj)\.?\s*([0-9a-z\-]+)|(quadra|qd)\.?\s*([0-9a-z\-]+)|(lote|lt)\.?\s*([0-9a-z\-]+)|(andar|pavimento|pav)\.?\s*([0-9a-z\-]+)|(fundos|fds|frente|sobrado|térreo|terreo|galpão|galpao|subsolo))\b"""
+    )
+
+    /**
+     * Extrai complementos comuns em endereços brasileiros (Apto, Bloco, Casa, Torre, Sala, etc.)
+     * Ex: "Rua das Flores, 100 - Bloco B Apto 24" -> "Bloco B Apto 24"
+     *     "Av Brasil 500, Ap 102" -> "Apto 102"
+     *     "Rua 15, 45 Casa 2" -> "Casa 2"
+     */
+    fun extractComplement(text: String?): String {
+        if (text.isNullOrBlank()) return ""
+        val clean = MULTIPLE_SPACES_REGEX.replace(text, " ").trim()
+        val matches = COMPLEMENT_PATTERN.findAll(clean).toList()
+        if (matches.isEmpty()) return ""
+
+        val parts = mutableListOf<String>()
+        for (m in matches) {
+            val v = m.value.trim()
+            if (v.isNotBlank()) {
+                val formatted = formatComplementToken(v)
+                if (!parts.contains(formatted)) {
+                    parts.add(formatted)
+                }
+            }
+        }
+        return parts.joinToString(" ")
+    }
+
+    fun formatComplementToken(token: String): String {
+        val t = token.trim()
+        val lower = t.lowercase(Locale.ROOT)
+        return when {
+            lower.startsWith("ap") || lower.startsWith("apt") -> {
+                val num = REGEX_APTO_REPLACE.replace(t, "").trim()
+                if (num.isNotBlank()) "Apto $num" else "Apto"
+            }
+            lower.startsWith("bl") -> {
+                val num = REGEX_BLOCO_REPLACE.replace(t, "").trim()
+                if (num.isNotBlank()) "Bloco ${num.uppercase(Locale.ROOT)}" else "Bloco"
+            }
+            lower.startsWith("tor") || lower.startsWith("tr") -> {
+                val num = REGEX_TORRE_REPLACE.replace(t, "").trim()
+                if (num.isNotBlank()) "Torre ${num.uppercase(Locale.ROOT)}" else "Torre"
+            }
+            lower.startsWith("cs") || lower.startsWith("casa") -> {
+                val num = REGEX_CASA_REPLACE.replace(t, "").trim()
+                if (num.isNotBlank()) "Casa $num" else "Casa"
+            }
+            lower.startsWith("sl") || lower.startsWith("sala") -> {
+                val num = REGEX_SALA_REPLACE.replace(t, "").trim()
+                if (num.isNotBlank()) "Sala $num" else "Sala"
+            }
+            lower.startsWith("qd") || lower.startsWith("quadra") -> {
+                val num = REGEX_QUADRA_REPLACE.replace(t, "").trim()
+                if (num.isNotBlank()) "Qd $num" else "Quadra"
+            }
+            lower.startsWith("lt") || lower.startsWith("lote") -> {
+                val num = REGEX_LOTE_REPLACE.replace(t, "").trim()
+                if (num.isNotBlank()) "Lt $num" else "Lote"
+            }
+            lower.startsWith("fds") || lower == "fundos" -> "Fundos"
+            lower == "frente" -> "Frente"
+            lower == "sobrado" -> "Sobrado"
+            lower.startsWith("terreo") || lower.startsWith("térreo") -> "Térreo"
+            else -> capitalizeWords(t)
+        }
+    }
+
+    /**
+     * Analisa e divide um endereço em componentes separados (Rua, Número, Complemento/Unidade, Bairro).
+     */
+    fun parseAddressComponents(
+        rawAddress: String?,
+        rawNumber: String = "",
+        rawComplement: String = "",
+        rawNeighborhood: String = ""
+    ): AddressComponents {
+        if (rawAddress.isNullOrBlank()) {
+            return AddressComponents(
+                street = "",
+                number = rawNumber.trim(),
+                complement = rawComplement.trim(),
+                neighborhood = rawNeighborhood.trim()
+            )
+        }
+
+        var text = rawAddress.trim()
+        
+        // Remove prefixos de cabeçalho
+        text = REGEX_HEADER_PREFIXES.replace(text, "")
+        text = REGEX_DATE_TRAIL.replace(text, "")
+
+        var explicitNumber = rawNumber.trim()
+        var explicitComplement = rawComplement.trim()
+        var explicitBairro = rawNeighborhood.trim()
+
+        // 1. Extrai Bairro se presente após hífen no final
+        if (explicitBairro.isBlank() && text.contains("-")) {
+            val dashParts = text.split("-").map { it.trim() }
+            if (dashParts.size >= 2) {
+                val lastPart = dashParts.last()
+                if (!lastPart.any { it.isDigit() } && !COMPLEMENT_PATTERN.containsMatchIn(lastPart) && lastPart.length > 2) {
+                    explicitBairro = lastPart
+                    text = dashParts.dropLast(1).joinToString(" - ").trim()
+                }
+            }
+        }
+
+        // 2. Extrai Complemento embutido no texto
+        val foundComplement = extractComplement(text)
+        val finalComplement = if (explicitComplement.isNotBlank()) {
+            explicitComplement
+        } else {
+            foundComplement
+        }
+
+        var textWithoutComplement = text
+        if (foundComplement.isNotBlank()) {
+            textWithoutComplement = COMPLEMENT_PATTERN.replace(textWithoutComplement, " ")
+        }
+
+        // 3. Extrai Número
+        var finalNumber = explicitNumber
+        if (finalNumber.isBlank()) {
+            val numMatches = REGEX_NUMBERS_EXTRACT.findAll(textWithoutComplement).toList()
+            if (numMatches.isNotEmpty()) {
+                val lastOrPrimary = numMatches.firstOrNull { it.groupValues.size > 1 } ?: numMatches.first()
+                finalNumber = lastOrPrimary.groupValues.lastOrNull { it.isNotBlank() && it.any { c -> c.isDigit() } } ?: lastOrPrimary.value.trim()
+            }
+        }
+
+        // 4. Extrai Logradouro limpo
+        var street = textWithoutComplement
+        if (finalNumber.isNotBlank()) {
+            street = street.replace(Regex("""\b""" + Regex.escape(finalNumber) + """\b"""), " ")
+        }
+        street = REGEX_CLEAN_STREET_WORDS.replace(street, " ")
+        street = REGEX_PUNCT_SPLIT.replace(street, " ")
+        street = MULTIPLE_SPACES_REGEX.replace(street, " ").trim()
+
+        if (street.isBlank()) {
+            street = text.replace(finalNumber, "").trim(',', ' ', '-')
+        }
+
+        return AddressComponents(
+            street = capitalizeWords(street),
+            number = finalNumber.trim(),
+            complement = finalComplement.trim(),
+            neighborhood = capitalizeWords(explicitBairro)
+        )
+    }
+
+    /**
+     * Gera chave de ordenação para unidades e complementos (ex: Bloco A Apto 2 -> "BL_000A_UN_000002")
+     * Garante que entregas no mesmo condomínio fiquem organizadas por bloco e número da unidade.
+     */
+    fun getUnitSortKey(complement: String?): String {
+        if (complement.isNullOrBlank()) return "BL_0000_UN_000000"
+        val compNorm = normalize(complement)
+
+        var blockKey = "BL_ZZZZ"
+        val blockMatch = REGEX_BLOCK_MATCH.find(compNorm)
+        if (blockMatch != null) {
+            val bVal = blockMatch.groupValues[1]
+            blockKey = "BL_" + bVal.padStart(4, '0')
+        }
+
+        var unitNumKey = "UN_999999"
+        val unitMatch = REGEX_UNIT_MATCH.find(compNorm)
+        if (unitMatch != null) {
+            val num = unitMatch.groupValues[1].toIntOrNull() ?: 999999
+            unitNumKey = "UN_" + num.toString().padStart(6, '0')
+        } else {
+            val digits = compNorm.filter { it.isDigit() }
+            if (digits.isNotBlank()) {
+                val num = digits.toIntOrNull() ?: 999999
+                unitNumKey = "UN_" + num.toString().padStart(6, '0')
+            }
+        }
+
+        return "${blockKey}_${unitNumKey}_${compNorm}"
+    }
+
+    private val STREET_PREFIXES = listOf(
+        "rua", "r.", "r",
+        "avenida", "av.", "av",
+        "travessa", "trav.", "trav", "tv.", "tv",
+        "alameda", "al.", "al",
+        "praca", "praça", "pca.", "pca", "pr.", "pr",
+        "rodovia", "rod.", "rod",
+        "estrada", "est.", "est",
+        "viela", "beco", "bc.", "bc",
+        "servidao", "servidão", "serv.", "serv",
+        "passagem", "psg.", "psg",
+        "largo", "lgo.", "lgo",
+        "parque", "pq.", "pq",
+        "reserva", "res.", "res",
+        "jardim", "jd.", "jd",
+        "vila", "vl.", "vl",
+        "condominio", "cond.", "cond",
+        "setor", "st.", "st",
+        "quadra", "qd.", "qd",
+        "bloco", "bl.", "bl",
+        "chacara", "chácara", "ch.", "ch",
+        "sitio", "sítio", "fazenda", "faz."
+    )
+
+    /**
+     * Remove o tipo de logradouro (Rua, Av, Travessa, etc.) do início do endereço.
+     * Ex: "Rua 15 de Novembro, 120" -> "15 de Novembro, 120"
+     *     "Av. Brasil, 500" -> "Brasil, 500"
+     *     "Travessa Carlos Gomes" -> "Carlos Gomes"
+     */
+    fun stripStreetType(rawText: String?): String {
+        if (rawText.isNullOrBlank()) return ""
+        var text = rawText.trim()
+        
+        // Remove pontuações comuns no início
+        text = text.trimStart('-', ',', '.', ' ')
+
+        for (prefix in STREET_PREFIXES) {
+            val pLen = prefix.length
+            if (text.length >= pLen) {
+                val head = text.substring(0, pLen)
+                if (head.equals(prefix, ignoreCase = true)) {
+                    if (text.length == pLen) {
+                        return ""
+                    }
+                    val nextChar = text[pLen]
+                    if (nextChar == ' ' || nextChar == '.' || nextChar == ',' || nextChar == '-') {
+                        val remaining = text.substring(pLen).trimStart(' ', '.', ',', '-')
+                        return remaining.trim()
+                    }
+                }
+            }
+        }
+        return text.trim()
+    }
+
+    /**
+     * Gera chave padronizada para ordenação alfabética exclusivamente pelo nome da rua.
+     */
+    fun getStreetSortKey(rawText: String?): String {
+        if (rawText.isNullOrBlank()) return "zzzzzzzz"
+        val stripped = stripStreetType(rawText)
+        val normalized = normalize(stripped)
+        return if (normalized.isNotBlank()) normalized else normalize(rawText)
+    }
+
     private val ABBREVIATIONS = mapOf(
         "R." to "RUA",
         "R " to "RUA ",
@@ -45,12 +352,11 @@ object AddressNormalizer {
         var text = rawAddress.trim()
         
         // Remove cabeçalhos comuns
-        text = text.replace("(?i)^(Próxima\\s+entrega|Proxima\\s+entrega|Endereço|Endereco|Destino|Entrega|Para|Destinatário):?\\s*".toRegex(), "")
-        text = text.replace(Regex("\\s*\\d{2}/\\d{2}/\\d{4}.*"), "")
-        text = text.replace(Regex("\\s*\\(.*?\\)"), " ")
+        text = REGEX_HEADER_PREFIXES.replace(text, "")
+        text = REGEX_DATE_TRAIL.replace(text, "")
+        text = REGEX_PARENTHESES.replace(text, " ")
 
         // 0. Formato comum de aplicativos de entrega dos Correios / DDA / LOEC separados por ponto-e-vírgula (;)
-        // Ex: "Jd 1 de Maio;Av Limirio Pereira de Melo;2071 2071, 1 - Monte Santo de Minas/MG"
         if (text.contains(";")) {
             val semiParts = text.split(";").map { it.trim() }.filter { it.isNotBlank() }
             val logradouroIndex = semiParts.indexOfFirst { part ->
@@ -64,24 +370,23 @@ object AddressNormalizer {
 
             if (logradouroIndex != -1) {
                 val streetPart = semiParts[logradouroIndex]
-                // Procura o número na parte seguinte ou na mesma parte
                 var numberFound = ""
                 if (logradouroIndex + 1 < semiParts.size) {
                     val nextPart = semiParts[logradouroIndex + 1]
-                    val numMatch = Regex("""\b\d+[A-Za-z]?\b""").find(nextPart)
+                    val numMatch = REGEX_NUM_MATCH.find(nextPart)
                     if (numMatch != null) {
                         numberFound = numMatch.value
                     }
                 }
                 if (numberFound.isBlank()) {
-                    val numInStreet = Regex("""\b\d+[A-Za-z]?\b""").find(streetPart)
+                    val numInStreet = REGEX_NUM_MATCH.find(streetPart)
                     if (numInStreet != null) {
                         numberFound = numInStreet.value
                     }
                 }
 
                 if (numberFound.isNotBlank()) {
-                    val cleanStreet = streetPart.replace(Regex("""\b\d+.*"""), "").trimEnd(',', ' ', ';')
+                    val cleanStreet = REGEX_STREET_NUM_START.replace(streetPart, "").trimEnd(',', ' ', ';')
                     return cleanExtractedStreet("$cleanStreet, $numberFound")
                 } else {
                     return cleanExtractedStreet(streetPart)
@@ -89,23 +394,20 @@ object AddressNormalizer {
             }
         }
 
-        // 1. Procurar padrão clássico de Logradouro + Nome da Rua + Número (ex: "Rua Presidente Vargas, 450", "Av. Brasil 1000", "R. A, 12B")
-        val logradouroRegex = Regex("""((?:Rua|R\.|Av\.|Avenida|Alameda|Al\.|Praça|Praca|Pca\.|Pr\.|Travessa|Trav\.|Tv\.|Rodovia|Rod\.|Estrada|Est\.|Beco|Viela)\s+[^,\n;]+?,?\s*(?:nº|n°|n\.|n|º|°|numero|num)?\s*(\d+[A-Za-z]?))""", RegexOption.IGNORE_CASE)
-        val match = logradouroRegex.find(text)
+        // 1. Procurar padrão clássico de Logradouro + Nome da Rua + Número
+        val match = REGEX_LOGRADOURO.find(text)
         if (match != null) {
             val fullMatch = match.value.trim()
             return cleanExtractedStreet(fullMatch)
         }
 
-        // 2. Se não tem palavra de logradouro explícita, procurar qualquer nome seguido de número antes de vírgula/hífen/ponto-e-vírgula
-        // Ex: "Presidente Vargas, 450 - Centro - São Paulo" -> "Presidente Vargas, 450"
-        val streetNumberRegex = Regex("""^([^,\n;-]+?),?\s*(?:nº|n°|n\.|n|º|°|numero|num)?\s*(\d+[A-Za-z]?)""", RegexOption.IGNORE_CASE)
-        val secondMatch = streetNumberRegex.find(text)
+        // 2. Se não tem palavra de logradouro explícita, procurar qualquer nome seguido de número
+        val secondMatch = REGEX_STREET_NUMBER.find(text)
         if (secondMatch != null && secondMatch.value.any { it.isDigit() }) {
             return cleanExtractedStreet(secondMatch.value.trim())
         }
 
-        // 3. Fallback: Se tiver vírgula, traço ou ponto-e-vírgula separando partes (ex: "Rua das Flores, 123, Bairro Bela Vista")
+        // 3. Fallback: Se tiver vírgula, traço ou ponto-e-vírgula separando partes
         val parts = text.split(",", "-", ";")
         if (parts.isNotEmpty()) {
             val first = parts[0].trim()
@@ -114,7 +416,7 @@ object AddressNormalizer {
             }
             if (parts.size > 1) {
                 val second = parts[1].trim()
-                val numMatch = Regex("""\b\d+[A-Za-z]?\b""").find(second)
+                val numMatch = REGEX_NUM_MATCH.find(second)
                 if (numMatch != null) {
                     return cleanExtractedStreet("$first, ${numMatch.value}")
                 }
@@ -126,7 +428,7 @@ object AddressNormalizer {
     }
 
     private fun cleanExtractedStreet(text: String): String {
-        var res = text.replace(Regex("""\s+"""), " ").trim()
+        var res = MULTIPLE_SPACES_REGEX.replace(text, " ").trim()
         res = res.trimEnd(',', '-', '.', ' ')
         return res
     }
@@ -142,14 +444,11 @@ object AddressNormalizer {
 
         // 1. Remover acentos (á -> a, ç -> c)
         val decomposed = Normalizer.normalize(text, Normalizer.Form.NFD)
-        val pattern = Pattern.compile("\\p{InCombiningDiacriticalMarks}+")
-        text = pattern.matcher(decomposed).replaceAll("")
+        text = REGEX_DIACRITICS.replace(decomposed, "")
 
         // 2. Substituir abreviações conhecidas
         for ((abbr, full) in ABBREVIATIONS) {
-            val normalizedAbbr = Normalizer.normalize(abbr, Normalizer.Form.NFD)
-                .replace("\\p{InCombiningDiacriticalMarks}+".toRegex(), "")
-                .uppercase(Locale.ROOT)
+            val normalizedAbbr = REGEX_DIACRITICS.replace(Normalizer.normalize(abbr, Normalizer.Form.NFD), "").uppercase(Locale.ROOT)
 
             if (text.startsWith("$normalizedAbbr ") || text.startsWith(normalizedAbbr)) {
                 text = text.replaceFirst(normalizedAbbr, full)
@@ -158,11 +457,11 @@ object AddressNormalizer {
             text = text.replace(" $normalizedAbbr", " $full")
         }
 
-        // 3. Remover caracteres de pontuação (pontos, vírgulas, hífens, barras, ponto-e-vírgula)
-        text = text.replace("[,.\\-/_#()ºª;]".toRegex(), " ")
+        // 3. Remover caracteres de pontuação
+        text = REGEX_PUNCTUATION_NORM.replace(text, " ")
 
         // 4. Remover múltiplos espaços em branco
-        text = text.replace("\\s+".toRegex(), " ").trim()
+        text = MULTIPLE_SPACES_REGEX.replace(text, " ").trim()
 
         return text
     }
@@ -177,7 +476,6 @@ object AddressNormalizer {
         if (nQuery.isBlank() || nTarget.isBlank()) return false
         if (nTarget.contains(nQuery) || nQuery.contains(nTarget)) return true
 
-        // Comparação token a token (todas as palavras da query presentes no alvo)
         val queryTokens = nQuery.split(" ").filter { it.length > 1 }
         val targetTokens = nTarget.split(" ").toSet()
 
@@ -198,8 +496,7 @@ object AddressNormalizer {
 
     fun extractNumbers(text: String?): List<String> {
         if (text.isNullOrBlank()) return emptyList()
-        val regex = Regex("""\b\d+[A-Za-z]?\b""")
-        return regex.findAll(text).map { it.value.uppercase(Locale.ROOT) }.toList()
+        return REGEX_NUM_MATCH.findAll(text).map { it.value.uppercase(Locale.ROOT) }.toList()
     }
 
     fun extractStreetSignificantWords(text: String?): List<String> {
@@ -214,26 +511,32 @@ object AddressNormalizer {
     }
 
     /**
-     * Compara se dois endereços correspondem ao MESMO local com alta tolerância a formatação,
-     * pontuações, vírgulas, abreviações (R./Rua, Av./Avenida) e textos adicionais de bairros/cidades.
+     * Compara se dois endereços correspondem ao MESMO local com alta tolerância
      */
-    fun matchesPrecise(queryAddress: String, targetAddress: String, targetNumber: String = ""): Boolean {
+    fun matchesPrecise(
+        queryAddress: String,
+        targetAddress: String,
+        targetNumber: String = "",
+        targetComplement: String = ""
+    ): Boolean {
         val nQuery = normalize(queryAddress)
-        val combinedTarget = if (targetNumber.isNotBlank() && !targetAddress.contains(targetNumber)) {
-            "$targetAddress, $targetNumber"
-        } else {
-            targetAddress
+        val combinedTarget = buildString {
+            append(targetAddress)
+            if (targetNumber.isNotBlank() && !targetAddress.contains(targetNumber)) {
+                append(", ").append(targetNumber)
+            }
+            if (targetComplement.isNotBlank() && !targetAddress.contains(targetComplement)) {
+                append(" ").append(targetComplement)
+            }
         }
         val nTarget = normalize(combinedTarget)
 
         if (nQuery.isBlank() || nTarget.isBlank()) return false
 
-        // Se uma contém a outra diretamente após normalização
         if (nQuery == nTarget || nQuery.contains(nTarget) || nTarget.contains(nQuery)) {
             return true
         }
 
-        // 1. Extrai números
         val queryNumbers = extractNumbers(nQuery)
         val targetNumbers = if (targetNumber.isNotBlank()) {
             extractNumbers(targetNumber).ifEmpty { extractNumbers(nTarget) }
@@ -241,7 +544,6 @@ object AddressNormalizer {
             extractNumbers(nTarget)
         }
 
-        // Se ambos têm números, DEVE haver número coincidente (ex: 450 == 450 ou 450A == 450)
         if (queryNumbers.isNotEmpty() && targetNumbers.isNotEmpty()) {
             val hasCommonNumber = queryNumbers.any { qNum ->
                 targetNumbers.any { tNum ->
@@ -250,16 +552,11 @@ object AddressNormalizer {
                 }
             }
             if (!hasCommonNumber) {
-                // Números explicitamente diferentes (ex: casa 450 vs casa 120 na mesma rua)
                 return false
             }
         } else if (queryNumbers.isNotEmpty() && targetNumbers.isEmpty()) {
-            // A consulta tem número específico na tela (ex: Rua Brasil, 500), mas o cadastro não tem número
-            // Não deve casar automaticamente com qualquer um se a tela tem número claro
             return false
         } else if (queryNumbers.isEmpty() && targetNumbers.isNotEmpty()) {
-            // Se a tela não tem número mas o cadastro tem número específico, evita falso positivo generalizado
-            // a não ser que a rua seja idêntica
             val queryWords = extractStreetSignificantWords(nQuery)
             val targetWords = extractStreetSignificantWords(nTarget)
             if (queryWords != targetWords) {
@@ -267,7 +564,19 @@ object AddressNormalizer {
             }
         }
 
-        // Palavras significativas do logradouro (sem números e sem stop words como RUA, DE, DA, etc.)
+        val queryComp = extractComplement(queryAddress)
+        val targetComp = if (targetComplement.isNotBlank()) targetComplement else extractComplement(targetAddress)
+        
+        if (queryComp.isNotBlank() && targetComp.isNotBlank()) {
+            val nQueryComp = normalize(queryComp)
+            val nTargetComp = normalize(targetComp)
+            val qCompDigits = nQueryComp.filter { it.isDigit() }
+            val tCompDigits = nTargetComp.filter { it.isDigit() }
+            if (qCompDigits.isNotBlank() && tCompDigits.isNotBlank() && qCompDigits != tCompDigits) {
+                return false
+            }
+        }
+
         val queryWords = extractStreetSignificantWords(nQuery)
         val targetWords = extractStreetSignificantWords(nTarget)
 
@@ -275,7 +584,6 @@ object AddressNormalizer {
             return nQuery.contains(nTarget) || nTarget.contains(nQuery)
         }
 
-        // Verifica correspondência de palavras-chave da rua
         val targetInQueryCount = targetWords.count { word ->
             nQuery.contains(word) || queryWords.any { qWord ->
                 isSimilarWord(qWord, word)
@@ -290,18 +598,16 @@ object AddressNormalizer {
         val targetRatio = targetInQueryCount.toFloat() / targetWords.size
         val queryRatio = queryInTargetCount.toFloat() / queryWords.size
 
-        // Se todas ou a grande maioria das palavras do logradouro cadastrado foram achadas no texto da tela
         return targetRatio >= 0.6f || (queryRatio >= 0.6f && targetInQueryCount > 0) || (targetInQueryCount >= 2) || (targetWords.size == 1 && targetInQueryCount == 1)
     }
 
     /**
-     * Capitaliza a primeira letra de cada palavra (Title Case), mantendo preposições (da, de, do, das, dos, e, du) em minúsculo no meio do nome.
-     * Ex: "FULANO DA SILVA" -> "Fulano da Silva"
+     * Capitaliza a primeira letra de cada palavra (Title Case)
      */
     fun capitalizeWords(input: String): String {
         if (input.isBlank()) return input
         val particles = setOf("da", "de", "do", "das", "dos", "du", "e")
-        val words = input.trim().split(Regex("\\s+"))
+        val words = MULTIPLE_SPACES_REGEX.split(input.trim())
         return words.mapIndexed { index, word ->
             if (word.isEmpty()) return@mapIndexed ""
             val lowerWord = word.lowercase(Locale.getDefault())
@@ -313,25 +619,33 @@ object AddressNormalizer {
         }.joinToString(" ")
     }
 
+    /**
+     * Distância de Levenshtein otimizada com 2 vetores 1D (O(N) espaço) para não inflar o Garbage Collector
+     */
     fun levenshteinDistance(s1: String, s2: String): Int {
         val m = s1.length
         val n = s2.length
-        val dp = Array(m + 1) { IntArray(n + 1) }
+        if (m == 0) return n
+        if (n == 0) return m
 
-        for (i in 0..m) dp[i][0] = i
-        for (j in 0..n) dp[0][j] = j
+        var prev = IntArray(n + 1) { it }
+        var curr = IntArray(n + 1)
 
         for (i in 1..m) {
+            curr[0] = i
             for (j in 1..n) {
                 val cost = if (s1[i - 1] == s2[j - 1]) 0 else 1
-                dp[i][j] = minOf(
-                    dp[i - 1][j] + 1,
-                    dp[i][j - 1] + 1,
-                    dp[i - 1][j - 1] + cost
+                curr[j] = minOf(
+                    prev[j] + 1,
+                    curr[j - 1] + 1,
+                    prev[j - 1] + cost
                 )
             }
+            val temp = prev
+            prev = curr
+            curr = temp
         }
-        return dp[m][n]
+        return prev[n]
     }
 
     fun isSimilarWord(w1: String, w2: String): Boolean {
@@ -350,3 +664,4 @@ object AddressNormalizer {
         }
     }
 }
+

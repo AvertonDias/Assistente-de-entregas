@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -48,6 +50,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -61,6 +64,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -73,8 +77,10 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.data.local.entity.Person
 import com.example.data.model.Recebedor
 import com.example.data.model.SignatureData
+import com.example.ui.components.DialogBlurEffect
 import com.example.ui.components.SignatureCanvas
 import com.example.util.AddressNormalizer
+import com.example.util.FeedbackHelper
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -97,18 +103,27 @@ fun PersonEditScreen(
     }
 
     var address by remember { mutableStateOf(initialAddress) }
+    var number by remember { mutableStateOf("") }
+    var complement by remember { mutableStateOf("") }
+    var neighborhood by remember { mutableStateOf("") }
     var addressError by remember { mutableStateOf(false) }
 
     var recebedoresList by remember { mutableStateOf<List<Recebedor>>(emptyList()) }
 
     // Rastreamento para identificar alterações não salvas na tela inteira
     var initialAddressLoaded by remember { mutableStateOf(initialAddress) }
+    var initialNumberLoaded by remember { mutableStateOf("") }
+    var initialComplementLoaded by remember { mutableStateOf("") }
+    var initialNeighborhoodLoaded by remember { mutableStateOf("") }
     var initialRecebedoresLoaded by remember { mutableStateOf<List<Recebedor>>(emptyList()) }
     var showDiscardScreenConfirmDialog by remember { mutableStateOf(false) }
 
     val hasUnsavedScreenChanges by remember {
         androidx.compose.runtime.derivedStateOf {
             address.trim() != initialAddressLoaded.trim() ||
+                    number.trim() != initialNumberLoaded.trim() ||
+                    complement.trim() != initialComplementLoaded.trim() ||
+                    neighborhood.trim() != initialNeighborhoodLoaded.trim() ||
                     recebedoresList != initialRecebedoresLoaded
         }
     }
@@ -138,6 +153,7 @@ fun PersonEditScreen(
                 )
             },
             title = {
+                DialogBlurEffect()
                 Text(
                     text = "Descartar alterações?",
                     fontWeight = FontWeight.Bold,
@@ -200,7 +216,22 @@ fun PersonEditScreen(
         if (personId > 0) {
             val existing = viewModel.getPersonById(personId)
             if (existing != null) {
-                address = existing.endereco
+                val parsed = AddressNormalizer.parseAddressComponents(
+                    existing.endereco,
+                    existing.numero,
+                    existing.complemento,
+                    existing.bairro
+                )
+                address = parsed.street
+                number = parsed.number
+                complement = parsed.complement
+                neighborhood = parsed.neighborhood
+
+                initialAddressLoaded = parsed.street
+                initialNumberLoaded = parsed.number
+                initialComplementLoaded = parsed.complement
+                initialNeighborhoodLoaded = parsed.neighborhood
+
                 val mainReceiver = Recebedor(
                     id = "main",
                     nome = existing.nome,
@@ -210,13 +241,20 @@ fun PersonEditScreen(
                 val extraReceivers = Recebedor.listFromJson(existing.coRecebedoresJson)
                 val loadedList = listOf(mainReceiver) + extraReceivers
                 recebedoresList = loadedList
-                initialAddressLoaded = existing.endereco
                 initialRecebedoresLoaded = loadedList
             }
         } else {
             if (initialAddress.isNotBlank() && address.isBlank()) {
-                address = initialAddress
-                initialAddressLoaded = initialAddress
+                val parsed = AddressNormalizer.parseAddressComponents(initialAddress)
+                address = parsed.street
+                number = parsed.number
+                complement = parsed.complement
+                neighborhood = parsed.neighborhood
+
+                initialAddressLoaded = parsed.street
+                initialNumberLoaded = parsed.number
+                initialComplementLoaded = parsed.complement
+                initialNeighborhoodLoaded = parsed.neighborhood
             }
             if (recebedoresList.isEmpty()) {
                 val initialList = listOf(
@@ -247,11 +285,13 @@ fun PersonEditScreen(
             )
         }
     ) { innerPadding ->
+        val isAnyModalOrDialogOpen = showDiscardScreenConfirmDialog || editingRecebedor != null || isSignatureModalOpen
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.background),
+                .background(MaterialTheme.colorScheme.background)
+                .blur(if (isAnyModalOrDialogOpen) 12.dp else 0.dp),
             contentAlignment = Alignment.TopCenter
         ) {
             Column(
@@ -262,24 +302,210 @@ fun PersonEditScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Endereço
-            OutlinedTextField(
-                value = address,
-                onValueChange = {
-                    address = it
-                    addressError = it.isBlank()
-                },
-                label = { Text("Endereço (Rua e Número) *") },
-                placeholder = { Text("Ex: Rua das Flores, 123") },
-                isError = addressError,
-                supportingText = { if (addressError) Text("O endereço é obrigatório") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("person_address_input"),
-                singleLine = true
-            )
+                // SEÇÃO DE ENDEREÇO E UNIDADE (CONDOMÍNIOS / BLOCOS / APTOS)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Endereço & Unidade",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
 
-            // Seção de Recebedores
+                        // Logradouro / Rua
+                        OutlinedTextField(
+                            value = address,
+                            onValueChange = { newVal ->
+                                // Se o usuário colar ou digitar um endereço com número/complemento embutido
+                                if (newVal.contains(",") || newVal.contains("-") || newVal.contains(";") || newVal.any { it.isDigit() }) {
+                                    val parsed = AddressNormalizer.parseAddressComponents(newVal)
+                                    if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank())) {
+                                        address = parsed.street
+                                        if (parsed.number.isNotBlank() && number.isBlank()) number = parsed.number
+                                        if (parsed.complement.isNotBlank() && complement.isBlank()) complement = parsed.complement
+                                        if (parsed.neighborhood.isNotBlank() && neighborhood.isBlank()) neighborhood = parsed.neighborhood
+                                    } else {
+                                        address = newVal
+                                    }
+                                } else {
+                                    address = newVal
+                                }
+                                addressError = address.isBlank()
+                            },
+                            label = { Text("Logradouro / Rua / Avenida *") },
+                            placeholder = { Text("Ex: Rua das Flores") },
+                            isError = addressError,
+                            supportingText = { if (addressError) Text("O logradouro é obrigatório") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("person_address_input"),
+                            singleLine = true
+                        )
+
+                        // Linha com Número e Complemento / Unidade
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = number,
+                                onValueChange = { number = it },
+                                label = { Text("Número") },
+                                placeholder = { Text("Ex: 100") },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("person_number_input"),
+                                singleLine = true
+                            )
+
+                            OutlinedTextField(
+                                value = complement,
+                                onValueChange = { complement = it },
+                                label = { Text("Complemento / Unidade") },
+                                placeholder = { Text("Ex: Bloco B Apto 24") },
+                                modifier = Modifier
+                                    .weight(1.8f)
+                                    .testTag("person_complement_input"),
+                                singleLine = true
+                            )
+                        }
+
+                        // Chips rápidos para complemento
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = "Adicionar complemento rápido:",
+                                fontSize = 11.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val quickChips = listOf(
+                                    "Apto ", "Bloco ", "Casa ", "Torre ", "Sala ", "Fundos", "Sobrado", "Lote ", "Quadra "
+                                )
+                                quickChips.forEach { chip ->
+                                    Surface(
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                        modifier = Modifier.clickable {
+                                            complement = if (complement.isBlank()) chip else "${complement.trim()} $chip"
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "+ $chip",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Campo de Bairro
+                        OutlinedTextField(
+                            value = neighborhood,
+                            onValueChange = { neighborhood = it },
+                            label = { Text("Bairro (Opcional)") },
+                            placeholder = { Text("Ex: Jardim das Rosas") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("person_neighborhood_input"),
+                            singleLine = true
+                        )
+
+                        // Preview visual do endereço cadastrado
+                        if (address.isNotBlank() || number.isNotBlank() || complement.isNotBlank()) {
+                            val parsedPreview = remember(address, number, complement, neighborhood) {
+                                AddressNormalizer.parseAddressComponents(address, number, complement, neighborhood)
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text(
+                                        text = "Pré-visualização da identificação:",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = parsedPreview.street.ifBlank { "Sem logradouro" },
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Row(
+                                        modifier = Modifier.padding(top = 4.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        if (parsedPreview.number.isNotBlank()) {
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                            ) {
+                                                Text(
+                                                    text = "Nº ${parsedPreview.number}",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                        if (parsedPreview.hasComplement) {
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = MaterialTheme.colorScheme.tertiaryContainer
+                                            ) {
+                                                Text(
+                                                    text = parsedPreview.unitBadgeText,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Seção de Recebedores
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -477,9 +703,9 @@ fun PersonEditScreen(
                             nome = primaryRecebedor.nome,
                             documento = primaryRecebedor.documento.trim(),
                             endereco = address.trim(),
-                            numero = "",
-                            complemento = "",
-                            bairro = "",
+                            numero = number.trim(),
+                            complemento = complement.trim(),
+                            bairro = neighborhood.trim(),
                             cidade = "",
                             uf = "",
                             observacao = "",
@@ -488,6 +714,7 @@ fun PersonEditScreen(
                         )
 
                         viewModel.savePerson(person) {
+                            FeedbackHelper.triggerSuccess(context)
                             Toast.makeText(context, "Destinatário salvo com sucesso!", Toast.LENGTH_SHORT).show()
                             onNavigateBack()
                         }
@@ -549,12 +776,12 @@ fun PersonEditScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF0F172A))
+                .background(Color(0xFFF8FAFC))
         ) {
             SignatureCanvas(
                 modifier = Modifier.fillMaxSize(),
                 initialSignature = currentSigData,
-                isDarkTheme = true,
+                isDarkTheme = false,
                 onSignatureConfirmed = { signature ->
                     val sigJson = signature.toJson()
                     editingRecebedor = editingRecebedor?.copy(assinatura = sigJson)
@@ -639,6 +866,7 @@ fun RecebedorDialog(
                 )
             },
             title = {
+                DialogBlurEffect()
                 Text(
                     text = "Descartar alterações?",
                     fontWeight = FontWeight.Bold,
@@ -685,6 +913,7 @@ fun RecebedorDialog(
                 )
             },
             title = {
+                DialogBlurEffect()
                 Text(
                     text = "Limpar assinatura salva?",
                     fontWeight = FontWeight.Bold,
@@ -732,6 +961,7 @@ fun RecebedorDialog(
     AlertDialog(
         onDismissRequest = handleAttemptDismiss,
         title = {
+            DialogBlurEffect()
             Text(
                 text = if (isNew) "Adicionar Recebedor" else "Editar Recebedor",
                 fontWeight = FontWeight.Bold

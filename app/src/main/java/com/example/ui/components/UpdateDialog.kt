@@ -59,6 +59,7 @@ fun UpdateDialog(
             )
         },
         title = {
+            DialogBlurEffect()
             Text(
                 text = "Nova Versão ${updateInfo.versionName} (v${updateInfo.versionCode})",
                 fontWeight = FontWeight.Bold,

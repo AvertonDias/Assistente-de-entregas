@@ -69,6 +69,7 @@ class SettingsRepositoryImpl(
             .putBoolean("sound_enabled", settings.soundEnabled)
             .putBoolean("confirm_before_fill", settings.confirmBeforeFill)
             .putBoolean("confirm_before_signature", settings.confirmBeforeSendSignature)
+            .putString("theme_mode", settings.themeMode)
             .putString("themeMode", settings.themeMode)
             .putString("scan_target_mode", settings.scanTargetMode)
             .putFloat("scan_area_left", settings.scanAreaLeft)

@@ -4,8 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.entity.Person
+import com.example.data.model.Recebedor
 import com.example.data.model.SignatureData
 import com.example.data.repository.PersonRepository
+import com.example.util.AddressNormalizer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -61,7 +63,27 @@ class PeopleViewModel(
             if (person.id > 0) {
                 personRepository.updatePerson(person.copy(dataAtualizacao = System.currentTimeMillis()))
             } else {
-                personRepository.insertPerson(person)
+                val existingList = personRepository.findPersonsByAddress(person.endereco)
+                if (existingList.isNotEmpty()) {
+                    val basePerson = existingList.first()
+                    val existingExtras = Recebedor.listFromJson(basePerson.coRecebedoresJson).toMutableList()
+                    val newRec = Recebedor(
+                        id = "co_${System.currentTimeMillis().toString().takeLast(6)}",
+                        nome = person.nome,
+                        documento = person.documento,
+                        assinatura = person.assinatura
+                    )
+                    existingExtras.add(newRec)
+                    val extraFromNew = Recebedor.listFromJson(person.coRecebedoresJson)
+                    existingExtras.addAll(extraFromNew)
+                    val updated = basePerson.copy(
+                        coRecebedoresJson = Recebedor.listToJson(existingExtras.distinctBy { "${it.nome.trim().lowercase()}_${it.documento.trim()}" }),
+                        dataAtualizacao = System.currentTimeMillis()
+                    )
+                    personRepository.updatePerson(updated)
+                } else {
+                    personRepository.insertPerson(person)
+                }
             }
             onComplete()
         }

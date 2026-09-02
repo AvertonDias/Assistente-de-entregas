@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import com.example.data.local.entity.Person
 import com.example.data.model.ExternalAppProfile
 import com.example.data.model.SignatureData
@@ -26,6 +27,9 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private val REGEX_CLEAN_HEADER = Regex("^(Próxima Entrega|Proxima Entrega|Endereço|Endereco|Entrega|Destinatário|Destinatario|Para):?\\s*", RegexOption.IGNORE_CASE)
+private val REGEX_CLEAN_DATE = Regex("\\s*\\d{2}/\\d{2}/\\d{4}.*")
 
 data class DiagnosticLogEntry(
     val timestamp: Long = System.currentTimeMillis(),
@@ -127,9 +131,10 @@ object AccessibilityAutomationEngine {
         }
 
         if (rootNode != null) {
-            // Cancela varredura anterior se ainda pendente para processar o estado mais recente imediatamente
+            // Cancela varredura anterior se ainda pendente para processar o estado mais recente
             scanJob?.cancel()
             scanJob = scope.launch {
+                kotlinx.coroutines.delay(180) // Debounce rapid accessibility events during scrolling/typing
                 scanAndExtractScreenDataInternal(rootNode, packageName)
             }
         }
@@ -354,9 +359,13 @@ object AccessibilityAutomationEngine {
             }
         }
 
-        for (i in 0 until node.childCount) {
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
             collectTextsInRect(child, rectLeft, rectTop, rectRight, rectBottom, list, screenW, screenH)
+            try {
+                child.recycle()
+            } catch (_: Exception) {}
         }
     }
 
@@ -366,8 +375,8 @@ object AccessibilityAutomationEngine {
             return extracted
         }
         var cleaned = text.trim()
-        cleaned = cleaned.replace(Regex("^(Próxima Entrega|Proxima Entrega|Endereço|Endereco|Entrega|Destinatário|Destinatario|Para):?\\s*", RegexOption.IGNORE_CASE), "")
-        cleaned = cleaned.replace(Regex("\\s*\\d{2}/\\d{2}/\\d{4}.*"), "")
+        cleaned = REGEX_CLEAN_HEADER.replace(cleaned, "")
+        cleaned = REGEX_CLEAN_DATE.replace(cleaned, "")
         return cleaned.trimEnd('-', ' ', ',', '.')
     }
 
@@ -381,9 +390,13 @@ object AccessibilityAutomationEngine {
         if (!desc.isNullOrBlank() && desc.length > 3 && desc != text) {
             list.add(desc)
         }
-        for (i in 0 until node.childCount) {
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
             collectAllTexts(child, list)
+            try {
+                child.recycle()
+            } catch (_: Exception) {}
         }
     }
 
@@ -446,7 +459,9 @@ object AccessibilityAutomationEngine {
             val profile = ExternalAppProfile.GENERIC_DEFAULT
 
             for (node in editableNodes) {
-                val hint = node.hintText?.toString()?.lowercase(Locale.ROOT) ?: ""
+                val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    node.hintText?.toString()?.lowercase(Locale.ROOT) ?: ""
+                } else ""
                 val text = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
                 val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
                 val viewId = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
@@ -558,19 +573,22 @@ object AccessibilityAutomationEngine {
 
     private fun setTextToNode(node: AccessibilityNodeInfo, text: String): Boolean {
         if (!node.isVisibleToUser) return false
+        val compatNode = AccessibilityNodeInfoCompat.wrap(node)
         val arguments = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            putCharSequence(AccessibilityNodeInfoCompat.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
         var result = false
         try {
-            result = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+            result = compatNode.performAction(AccessibilityNodeInfoCompat.ACTION_SET_TEXT, arguments)
         } catch (e: Exception) {
             result = false
         }
         if (!result) {
             try {
-                node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                result = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                if (compatNode.isFocusable && !compatNode.isFocused) {
+                    compatNode.performAction(AccessibilityNodeInfoCompat.ACTION_FOCUS)
+                }
+                result = compatNode.performAction(AccessibilityNodeInfoCompat.ACTION_SET_TEXT, arguments)
             } catch (ignored: Exception) {}
         }
         return result
@@ -848,10 +866,14 @@ object AccessibilityAutomationEngine {
             return node
         }
 
-        for (i in 0 until node.childCount) {
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
             val found = findSignatureAreaNode(child)
             if (found != null) return found
+            try {
+                child.recycle()
+            } catch (_: Exception) {}
         }
 
         // Caso seja uma correspondência mas de tamanho marginal, retorna como plano B
@@ -893,21 +915,40 @@ object AccessibilityAutomationEngine {
     }
 
     fun selectRecebedor(recebedor: Recebedor) {
-        _state.value = _state.value.copy(selectedRecebedor = recebedor)
+        val personId = recebedor.id.removePrefix("p_").substringBefore("_").toLongOrNull()
+        val targetPerson = if (personId != null) {
+            _state.value.candidatePersons.firstOrNull { it.id == personId } ?: _state.value.matchedPerson
+        } else {
+            _state.value.matchedPerson
+        }
+        _state.value = _state.value.copy(
+            selectedRecebedor = recebedor,
+            matchedPerson = targetPerson
+        )
     }
 
     fun setMatchedPersonDirect(person: Person) {
-        val recebedores = extractAllRecebedores(listOf(person))
-        val addressToSet = person.endereco.ifBlank { _state.value.detectedAddressText }
-        _state.value = _state.value.copy(
-            detectedAddressText = addressToSet,
-            isAddressLocked = true,
-            matchedPerson = person,
-            candidatePersons = listOf(person),
-            availableRecebedores = recebedores,
-            selectedRecebedor = recebedores.firstOrNull(),
-            logs = addLog("Destinatário selecionado manualmente: ${person.nome} (${if (person.endereco.isNotBlank()) person.endereco else "Sem endereço"})", true)
-        )
+        scope.launch {
+            val repo = personRepository
+            val addressToSet = person.endereco.ifBlank { _state.value.detectedAddressText }
+            val matched = if (addressToSet.isNotBlank() && repo != null) {
+                val found = repo.findPersonsByAddress(addressToSet)
+                if (found.none { it.id == person.id }) listOf(person) + found else found
+            } else {
+                listOf(person)
+            }
+            val recebedores = extractAllRecebedores(matched)
+            val selected = recebedores.firstOrNull { it.id.startsWith("p_${person.id}") } ?: recebedores.firstOrNull()
+            _state.value = _state.value.copy(
+                detectedAddressText = addressToSet,
+                isAddressLocked = true,
+                matchedPerson = person,
+                candidatePersons = matched,
+                availableRecebedores = recebedores,
+                selectedRecebedor = selected,
+                logs = addLog("Destinatário selecionado manualmente: ${person.nome} (${if (person.endereco.isNotBlank()) person.endereco else "Sem endereço"})", true)
+            )
+        }
     }
 
     fun setDetectedAddressDirect(address: String) {

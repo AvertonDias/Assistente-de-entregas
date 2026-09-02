@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.blur
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Check
@@ -162,7 +163,9 @@ fun SignatureCanvas(
             .padding(horizontal = 6.dp, vertical = 4.dp)
     ) {
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .blur(if (showClearConfirmDialog || showDiscardConfirmDialog) 12.dp else 0.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
         // Cabeçalho fino e ultra-compacto para maximizar a área vertical do canvas na orientação paisagem

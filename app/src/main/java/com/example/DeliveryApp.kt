@@ -37,6 +37,7 @@ class DeliveryApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        bypassHiddenApiRestrictions()
         try {
             if (FirebaseApp.getApps(this).isEmpty()) {
                 val app = FirebaseApp.initializeApp(this)
@@ -64,6 +65,27 @@ class DeliveryApp : Application() {
             }
         }
         com.example.util.CrashReporter.init(this)
+    }
+
+    private fun bypassHiddenApiRestrictions() {
+        try {
+            val vmRuntimeClass = Class.forName("dalvik.system.VMRuntime")
+            val getRuntimeMethod = vmRuntimeClass.getDeclaredMethod("getRuntime")
+            val vmRuntime = getRuntimeMethod.invoke(null)
+            val setHiddenApiExemptionsMethod = vmRuntimeClass.getDeclaredMethod(
+                "setHiddenApiExemptions",
+                Array<String>::class.java
+            )
+            setHiddenApiExemptionsMethod.invoke(
+                vmRuntime,
+                arrayOf(
+                    "Landroid/view/accessibility/AccessibilityNodeInfo;",
+                    "Landroid/view/accessibility/"
+                )
+            )
+        } catch (e: Throwable) {
+            Log.d("DeliveryApp", "HiddenApiBypass: ${e.message}")
+        }
     }
 
     companion object {
