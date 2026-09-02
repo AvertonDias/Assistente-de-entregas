@@ -38,7 +38,7 @@ object AddressNormalizer {
 
     /**
      * Extrai apenas a rua e o número da casa a partir de um texto de endereço lido.
-     * Trata pontuações, complementos, bairros e cidades no texto.
+     * Trata pontuações, complementos, formatos com ponto-e-vírgula (LOEC/DDA), bairros e cidades no texto.
      */
     fun extractStreetAndNumber(rawAddress: String?): String {
         if (rawAddress.isNullOrBlank()) return ""
@@ -49,24 +49,64 @@ object AddressNormalizer {
         text = text.replace(Regex("\\s*\\d{2}/\\d{2}/\\d{4}.*"), "")
         text = text.replace(Regex("\\s*\\(.*?\\)"), " ")
 
+        // 0. Formato comum de aplicativos de entrega dos Correios / DDA / LOEC separados por ponto-e-vírgula (;)
+        // Ex: "Jd 1 de Maio;Av Limirio Pereira de Melo;2071 2071, 1 - Monte Santo de Minas/MG"
+        if (text.contains(";")) {
+            val semiParts = text.split(";").map { it.trim() }.filter { it.isNotBlank() }
+            val logradouroIndex = semiParts.indexOfFirst { part ->
+                val pUpper = part.uppercase(Locale.ROOT)
+                pUpper.startsWith("RUA ") || pUpper.startsWith("R.") || pUpper.startsWith("R ") ||
+                pUpper.startsWith("AV") || pUpper.startsWith("AVENIDA") || pUpper.startsWith("ALAMEDA") ||
+                pUpper.startsWith("AL.") || pUpper.startsWith("TRAVESSA") || pUpper.startsWith("TV") ||
+                pUpper.startsWith("PRAÇA") || pUpper.startsWith("PRACA") || pUpper.startsWith("RODOVIA") ||
+                pUpper.startsWith("ESTRADA") || pUpper.startsWith("BECO") || pUpper.startsWith("VIELA")
+            }
+
+            if (logradouroIndex != -1) {
+                val streetPart = semiParts[logradouroIndex]
+                // Procura o número na parte seguinte ou na mesma parte
+                var numberFound = ""
+                if (logradouroIndex + 1 < semiParts.size) {
+                    val nextPart = semiParts[logradouroIndex + 1]
+                    val numMatch = Regex("""\b\d+[A-Za-z]?\b""").find(nextPart)
+                    if (numMatch != null) {
+                        numberFound = numMatch.value
+                    }
+                }
+                if (numberFound.isBlank()) {
+                    val numInStreet = Regex("""\b\d+[A-Za-z]?\b""").find(streetPart)
+                    if (numInStreet != null) {
+                        numberFound = numInStreet.value
+                    }
+                }
+
+                if (numberFound.isNotBlank()) {
+                    val cleanStreet = streetPart.replace(Regex("""\b\d+.*"""), "").trimEnd(',', ' ', ';')
+                    return cleanExtractedStreet("$cleanStreet, $numberFound")
+                } else {
+                    return cleanExtractedStreet(streetPart)
+                }
+            }
+        }
+
         // 1. Procurar padrão clássico de Logradouro + Nome da Rua + Número (ex: "Rua Presidente Vargas, 450", "Av. Brasil 1000", "R. A, 12B")
-        val logradouroRegex = Regex("""((?:Rua|R\.|Av\.|Avenida|Alameda|Al\.|Praça|Praca|Pca\.|Pr\.|Travessa|Trav\.|Tv\.|Rodovia|Rod\.|Estrada|Est\.|Beco|Viela)\s+[^,\n-]+?,?\s*(?:nº|n°|n\.|n|º|°|numero|num)?\s*(\d+[A-Za-z]?))""", RegexOption.IGNORE_CASE)
+        val logradouroRegex = Regex("""((?:Rua|R\.|Av\.|Avenida|Alameda|Al\.|Praça|Praca|Pca\.|Pr\.|Travessa|Trav\.|Tv\.|Rodovia|Rod\.|Estrada|Est\.|Beco|Viela)\s+[^,\n;]+?,?\s*(?:nº|n°|n\.|n|º|°|numero|num)?\s*(\d+[A-Za-z]?))""", RegexOption.IGNORE_CASE)
         val match = logradouroRegex.find(text)
         if (match != null) {
             val fullMatch = match.value.trim()
             return cleanExtractedStreet(fullMatch)
         }
 
-        // 2. Se não tem palavra de logradouro explícita, procurar qualquer nome seguido de número antes de vírgula/hífen
+        // 2. Se não tem palavra de logradouro explícita, procurar qualquer nome seguido de número antes de vírgula/hífen/ponto-e-vírgula
         // Ex: "Presidente Vargas, 450 - Centro - São Paulo" -> "Presidente Vargas, 450"
-        val streetNumberRegex = Regex("""^([^,\n-]+?),?\s*(?:nº|n°|n\.|n|º|°|numero|num)?\s*(\d+[A-Za-z]?)""", RegexOption.IGNORE_CASE)
+        val streetNumberRegex = Regex("""^([^,\n;-]+?),?\s*(?:nº|n°|n\.|n|º|°|numero|num)?\s*(\d+[A-Za-z]?)""", RegexOption.IGNORE_CASE)
         val secondMatch = streetNumberRegex.find(text)
         if (secondMatch != null && secondMatch.value.any { it.isDigit() }) {
             return cleanExtractedStreet(secondMatch.value.trim())
         }
 
-        // 3. Fallback: Se tiver vírgula ou traço separando partes (ex: "Rua das Flores, 123, Bairro Bela Vista")
-        val parts = text.split(",", "-")
+        // 3. Fallback: Se tiver vírgula, traço ou ponto-e-vírgula separando partes (ex: "Rua das Flores, 123, Bairro Bela Vista")
+        val parts = text.split(",", "-", ";")
         if (parts.isNotEmpty()) {
             val first = parts[0].trim()
             if (first.any { it.isDigit() }) {
@@ -118,8 +158,8 @@ object AddressNormalizer {
             text = text.replace(" $normalizedAbbr", " $full")
         }
 
-        // 3. Remover caracteres de pontuação (pontos, vírgulas, hífens, barras)
-        text = text.replace("[,.\\-/_#()ºª]".toRegex(), " ")
+        // 3. Remover caracteres de pontuação (pontos, vírgulas, hífens, barras, ponto-e-vírgula)
+        text = text.replace("[,.\\-/_#()ºª;]".toRegex(), " ")
 
         // 4. Remover múltiplos espaços em branco
         text = text.replace("\\s+".toRegex(), " ").trim()

@@ -7,6 +7,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
@@ -54,26 +55,22 @@ class FirebaseAuthRepositoryImpl(
             if (FirebaseApp.getApps(appContext).isEmpty()) {
                 val initialized = FirebaseApp.initializeApp(appContext)
                 if (initialized == null) {
-                    val options = com.google.firebase.FirebaseOptions.Builder()
-                        .setApplicationId("1:946779143583:android:ea254adf31519413b591aa")
-                        .setApiKey("AIzaSyDKSJOuGg8nDr4HTiF9SXZcdYrl6FSeB0w")
-                        .setProjectId("assistente-de-entregas")
-                        .setStorageBucket("assistente-de-entregas.firebasestorage.app")
-                        .build()
-                    FirebaseApp.initializeApp(appContext, options)
+                    val options = com.google.firebase.FirebaseOptions.fromResource(appContext)
+                    if (options != null) {
+                        FirebaseApp.initializeApp(appContext, options)
+                    }
                 }
             }
             FirebaseAuth.getInstance()
         } catch (e: Exception) {
             try {
-                val options = com.google.firebase.FirebaseOptions.Builder()
-                    .setApplicationId("1:946779143583:android:ea254adf31519413b591aa")
-                    .setApiKey("AIzaSyDKSJOuGg8nDr4HTiF9SXZcdYrl6FSeB0w")
-                    .setProjectId("assistente-de-entregas")
-                    .setStorageBucket("assistente-de-entregas.firebasestorage.app")
-                    .build()
-                val app = FirebaseApp.initializeApp(appContext, options, "fallback_auth_app")
-                FirebaseAuth.getInstance(app)
+                val options = com.google.firebase.FirebaseOptions.fromResource(appContext)
+                if (options != null) {
+                    val app = FirebaseApp.initializeApp(appContext, options, "fallback_auth_app")
+                    FirebaseAuth.getInstance(app)
+                } else {
+                    null
+                }
             } catch (e2: Exception) {
                 Log.w("AuthRepository", "Firebase auth not available: ${e.message} / ${e2.message}")
                 null
@@ -221,8 +218,13 @@ class FirebaseAuthRepositoryImpl(
                 .setNonce(hashedNonce)
                 .build()
 
+            val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(clientId)
+                .setNonce(hashedNonce)
+                .build()
+
             val request = GetCredentialRequest.Builder()
                 .addCredentialOption(googleIdOption)
+                .addCredentialOption(signInWithGoogleOption)
                 .build()
 
             val result = credentialManager.getCredential(context = context, request = request)

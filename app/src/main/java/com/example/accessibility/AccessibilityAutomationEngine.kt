@@ -397,10 +397,10 @@ object AccessibilityAutomationEngine {
         }
 
         val triggers = listOf(
-            "RUA", "R.", "AVENIDA", "AV.", "CORONEL", "CEL.", "ALAMEDA", "AL.",
+            "RUA", "R.", "AVENIDA", "AV.", "AV ", "CORONEL", "CEL.", "ALAMEDA", "AL.",
             "PRAÇA", "PRACA", "PCA.", "TRAVESSA", "TV.", "RODOVIA", "ROD.", "ESTRADA", "EST.",
             "BECO", "VIELA", "LOTEAMENTO", "LOT.", "RESIDENCIAL", "RES.", "CONDOMINIO", "CONDOMÍNIO",
-            "BAIRRO", "CENTRO", "Nº", "N°", "NUMERO", "NUM.", "KM"
+            "JD", "JARDIM", "VL", "VILA", "BAIRRO", "CENTRO", "Nº", "N°", "NUMERO", "NUM.", "KM"
         )
         val hasTrigger = triggers.any { upper.contains(it) }
         val hasDigits = text.any { it.isDigit() }
