@@ -24,6 +24,12 @@ class PeopleViewModel(
     private val _tempSignature = MutableStateFlow<SignatureData?>(null)
     val tempSignature: StateFlow<SignatureData?> = _tempSignature.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            personRepository.cleanupInactiveReceiversOlderThan5Years()
+        }
+    }
+
     fun setTempSignature(signature: SignatureData?) {
         _tempSignature.value = signature
     }

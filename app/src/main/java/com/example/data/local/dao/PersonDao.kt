@@ -50,4 +50,7 @@ interface PersonDao {
 
     @Query("SELECT COUNT(*) FROM pessoas")
     suspend fun countPersons(): Int
+
+    @Query("SELECT * FROM pessoas WHERE dataAtualizacao < :cutoffTimestamp")
+    suspend fun getPersonsOlderThan(cutoffTimestamp: Long): List<Person>
 }

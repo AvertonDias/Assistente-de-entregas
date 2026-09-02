@@ -56,4 +56,34 @@ class PersonRepositoryImpl(
     override suspend fun deletePersonById(id: Long) = personDao.deletePersonById(id)
 
     override suspend fun countPersons(): Int = personDao.countPersons()
+
+    override suspend fun markPersonUsed(id: Long) {
+        val person = personDao.getPersonById(id) ?: return
+        personDao.updatePerson(person.copy(dataAtualizacao = System.currentTimeMillis()))
+    }
+
+    override suspend fun cleanupInactiveReceiversOlderThan5Years(): Int {
+        val fiveYearsInMillis = 5L * 365L * 24L * 60L * 60L * 1000L // 5 anos
+        val cutoff = System.currentTimeMillis() - fiveYearsInMillis
+        val expiredList = personDao.getPersonsOlderThan(cutoff)
+        
+        var countCleared = 0
+        for (person in expiredList) {
+            // O endereço É MANTIDO (endereco, numero, complemento, bairro, cidade, uf)
+            // Os recebedores secundários (coRecebedoresJson) TAMBÉM SÃO MANTIDOS
+            // Apaga APENAS o recebedor principal específico (nome, documento e assinatura)
+            if (person.nome.isNotBlank() || person.documento.isNotBlank() || person.assinatura.isNotBlank()) {
+                val cleanedPerson = person.copy(
+                    nome = "",
+                    documento = "",
+                    assinatura = "",
+                    observacao = if (person.observacao.isNotBlank()) "${person.observacao} (Recebedor principal limpo por expiração de 5 anos)" else "Recebedor principal limpo por expiração de 5 anos",
+                    dataAtualizacao = System.currentTimeMillis()
+                )
+                personDao.updatePerson(cleanedPerson)
+                countCleared++
+            }
+        }
+        return countCleared
+    }
 }

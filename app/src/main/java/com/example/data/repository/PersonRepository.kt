@@ -15,4 +15,6 @@ interface PersonRepository {
     suspend fun deletePerson(person: Person)
     suspend fun deletePersonById(id: Long)
     suspend fun countPersons(): Int
+    suspend fun cleanupInactiveReceiversOlderThan5Years(): Int
+    suspend fun markPersonUsed(id: Long)
 }
