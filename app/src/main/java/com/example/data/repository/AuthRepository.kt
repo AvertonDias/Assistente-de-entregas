@@ -192,14 +192,7 @@ class FirebaseAuthRepositoryImpl(
         return try {
             val credentialManager = CredentialManager.create(context)
 
-            // Gera um nonce SHA-256 seguro
-            val rawNonce = UUID.randomUUID().toString()
-            val bytes = rawNonce.toByteArray()
-            val md = MessageDigest.getInstance("SHA-256")
-            val digest = md.digest(bytes)
-            val hashedNonce = digest.fold("") { str, it -> str + "%02x".format(it) }
-
-            // Usa o clientId configurado, ou obtém do google-services.json (default_web_client_id), ou fallback
+            // Usa o clientId configurado, ou obtém do google-services.json (default_web_client_id), ou fallback do projeto
             val resClientId = try {
                 val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
                 if (resId != 0) context.getString(resId) else null
@@ -211,40 +204,44 @@ class FirebaseAuthRepositoryImpl(
                 ?: resClientId?.takeIf { it.isNotBlank() }
                 ?: "946779143583-qd2lkgkpfc1igmrgtmj0sjv2gden2ijh.apps.googleusercontent.com"
 
-            val googleIdOption = GetGoogleIdOption.Builder()
-                .setFilterByAuthorizedAccounts(false)
-                .setServerClientId(clientId)
-                .setAutoSelectEnabled(false)
+            Log.d("AuthRepository", "Iniciando Google Sign-In com Web ClientId: $clientId")
+
+            // Opção primária: GetSignInWithGoogleOption (oficial para o clique do botão "Continuar com o Google")
+            val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(clientId)
                 .build()
 
             val primaryRequest = GetCredentialRequest.Builder()
-                .addCredentialOption(googleIdOption)
+                .addCredentialOption(signInWithGoogleOption)
                 .build()
 
             val result = try {
                 credentialManager.getCredential(context = context, request = primaryRequest)
             } catch (primaryErr: Exception) {
-                // Se o usuário cancelou explicitamente, propaga o cancelamento
-                val pName = primaryErr.javaClass.simpleName
-                if (pName.contains("Cancellation", ignoreCase = true) || primaryErr.message?.contains("cancel", ignoreCase = true) == true) {
-                    throw primaryErr
-                }
-                Log.w("AuthRepository", "Tentando fallback com GetSignInWithGoogleOption: ${primaryErr.message}")
-                val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(clientId)
+                Log.w("AuthRepository", "Falha com GetSignInWithGoogleOption: ${primaryErr.javaClass.simpleName} - ${primaryErr.message}. Tentando GetGoogleIdOption...")
+                
+                // Fallback com GetGoogleIdOption
+                val googleIdOption = GetGoogleIdOption.Builder()
+                    .setFilterByAuthorizedAccounts(false)
+                    .setServerClientId(clientId)
+                    .setAutoSelectEnabled(false)
                     .build()
+
                 val fallbackRequest = GetCredentialRequest.Builder()
-                    .addCredentialOption(signInWithGoogleOption)
+                    .addCredentialOption(googleIdOption)
                     .build()
+
                 credentialManager.getCredential(context = context, request = fallbackRequest)
             }
+
             val credential = result.credential
+            Log.d("AuthRepository", "Credencial obtida do CredentialManager: ${credential.javaClass.name}, tipo: ${credential.type}")
 
             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
                 val idToken = googleIdTokenCredential.idToken
                 val auth = getFirebaseAuth()
 
-                if (auth != null) {
+                if (auth != null && idToken.isNotBlank()) {
                     try {
                         val authCredential = GoogleAuthProvider.getCredential(idToken, null)
                         val authResult = auth.signInWithCredential(authCredential).await()
@@ -271,7 +268,7 @@ class FirebaseAuthRepositoryImpl(
                 )
                 AuthResult.Success(localUser, isNewUser = false)
             } else {
-                throw Exception("Credencial do Google não reconhecida.")
+                throw Exception("Credencial do Google não reconhecida: tipo=${credential.type}")
             }
         } catch (e: Exception) {
             Log.e("AuthRepository", "=== ERRO NO GOOGLE SIGN-IN ===", e)
@@ -280,9 +277,11 @@ class FirebaseAuthRepositoryImpl(
             Log.e("AuthRepository", "Causa raiz: ${e.cause?.message}")
             
             val className = e.javaClass.simpleName
-            if (className.contains("Cancellation", ignoreCase = true) || 
-                className.contains("GetCredentialCancellationException", ignoreCase = true) ||
-                e.message?.contains("cancel", ignoreCase = true) == true) {
+            val message = e.message ?: ""
+            
+            // Só trata como cancelamento se não houver código de erro do Google e a mensagem for explicitamente de cancelamento manual
+            if ((className.contains("Cancellation", ignoreCase = true) || message.contains("user_cancel", ignoreCase = true)) 
+                && !message.contains("16") && !message.contains("10") && !message.contains("284") && !message.contains("failure", ignoreCase = true)) {
                 return AuthResult.Error("Login cancelado pelo usuário.")
             }
             

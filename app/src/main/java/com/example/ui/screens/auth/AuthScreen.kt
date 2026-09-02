@@ -435,27 +435,42 @@ fun AuthScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Botão de Login com Google
-                    OutlinedButton(
+                    // Botão de Login com Google estilizado e responsivo
+                    Surface(
                         onClick = {
-                            viewModel.signInWithGoogle(context) { onAuthSuccess() }
+                            if (!uiState.isLoading) {
+                                viewModel.signInWithGoogle(context) { onAuthSuccess() }
+                            }
                         },
                         enabled = !uiState.isLoading,
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color.White,
+                        border = androidx.compose.foundation.BorderStroke(1.2.dp, BentoBorder),
+                        shadowElevation = if (uiState.isLoading) 0.dp else 2.dp,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp)
-                            .testTag("btn_google_signin"),
-                        shape = RoundedCornerShape(14.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, BentoBorder)
+                            .testTag("btn_google_signin")
                     ) {
-                        Text(text = "🇬", fontSize = 20.sp)
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Continuar com o Google",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 14.sp,
-                            color = BentoTextPrimary
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            // Logo autêntico do Google desenhado em Canvas
+                            GoogleLogoCanvas(modifier = Modifier.size(20.dp))
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Text(
+                                text = "Continuar com o Google",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = BentoTextPrimary
+                            )
+                        }
                     }
                 }
             }
@@ -475,5 +490,69 @@ fun AuthScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+fun GoogleLogoCanvas(modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val width = size.width
+        val height = size.height
+        val radius = width.coerceAtMost(height) / 2f
+        val center = androidx.compose.ui.geometry.Offset(width / 2f, height / 2f)
+
+        val blue = Color(0xFF4285F4)
+        val red = Color(0xFFEA4335)
+        val yellow = Color(0xFFFBBC05)
+        val green = Color(0xFF34A853)
+
+        val strokeWidth = radius * 0.42f
+        val arcSize = androidx.compose.ui.geometry.Size(radius * 2 - strokeWidth, radius * 2 - strokeWidth)
+        val arcTopLeft = androidx.compose.ui.geometry.Offset(center.x - radius + strokeWidth / 2, center.y - radius + strokeWidth / 2)
+        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidth)
+
+        drawArc(
+            color = blue,
+            startAngle = -45f,
+            sweepAngle = 90f,
+            useCenter = false,
+            topLeft = arcTopLeft,
+            size = arcSize,
+            style = stroke
+        )
+        drawArc(
+            color = green,
+            startAngle = 45f,
+            sweepAngle = 90f,
+            useCenter = false,
+            topLeft = arcTopLeft,
+            size = arcSize,
+            style = stroke
+        )
+        drawArc(
+            color = yellow,
+            startAngle = 135f,
+            sweepAngle = 90f,
+            useCenter = false,
+            topLeft = arcTopLeft,
+            size = arcSize,
+            style = stroke
+        )
+        drawArc(
+            color = red,
+            startAngle = 225f,
+            sweepAngle = 90f,
+            useCenter = false,
+            topLeft = arcTopLeft,
+            size = arcSize,
+            style = stroke
+        )
+
+        val barHeight = strokeWidth * 0.95f
+        drawRect(
+            color = blue,
+            topLeft = androidx.compose.ui.geometry.Offset(center.x - strokeWidth * 0.1f, center.y - barHeight / 2),
+            size = androidx.compose.ui.geometry.Size(radius - strokeWidth * 0.05f, barHeight)
+        )
     }
 }
