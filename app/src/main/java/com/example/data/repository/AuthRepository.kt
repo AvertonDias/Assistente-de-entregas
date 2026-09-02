@@ -215,7 +215,6 @@ class FirebaseAuthRepositoryImpl(
                 .setFilterByAuthorizedAccounts(false)
                 .setServerClientId(clientId)
                 .setAutoSelectEnabled(false)
-                .setNonce(hashedNonce)
                 .build()
 
             val primaryRequest = GetCredentialRequest.Builder()
@@ -225,10 +224,13 @@ class FirebaseAuthRepositoryImpl(
             val result = try {
                 credentialManager.getCredential(context = context, request = primaryRequest)
             } catch (primaryErr: Exception) {
-                // Se falhar ou não encontrar credencial rápida, tenta o fallback com GetSignInWithGoogleOption isolado
+                // Se o usuário cancelou explicitamente, propaga o cancelamento
+                val pName = primaryErr.javaClass.simpleName
+                if (pName.contains("Cancellation", ignoreCase = true) || primaryErr.message?.contains("cancel", ignoreCase = true) == true) {
+                    throw primaryErr
+                }
                 Log.w("AuthRepository", "Tentando fallback com GetSignInWithGoogleOption: ${primaryErr.message}")
                 val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(clientId)
-                    .setNonce(hashedNonce)
                     .build()
                 val fallbackRequest = GetCredentialRequest.Builder()
                     .addCredentialOption(signInWithGoogleOption)
