@@ -80,13 +80,15 @@ class PersonRepositoryImpl(
         val all = personDao.getAllPersons().first()
         if (all.isEmpty()) return emptyList()
 
+        val parsedRaw = AddressNormalizer.parseAddressComponents(rawAddress)
+        val hasSpecificNumber = parsedRaw.number.isNotBlank()
+
         // Match preciso de endereço, número e complemento considerando todas as variações cadastradas
         val matches = all.filter { p ->
             AddressNormalizer.matchesPrecise(rawAddress, p.endereco, p.numero, p.complemento) ||
             AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero}", p.numero, p.complemento) ||
             AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero} ${p.complemento} ${p.bairro} ${p.cidade}", p.numero, p.complemento) ||
-            AddressNormalizer.matches(rawAddress, "${p.endereco} ${p.numero} ${p.complemento}") ||
-            (p.endereco.isNotBlank() && AddressNormalizer.matches(rawAddress, p.endereco))
+            (!hasSpecificNumber && p.endereco.isNotBlank() && AddressNormalizer.matches(rawAddress, p.endereco))
         }.distinctBy { it.id }
 
         return sortPersonsByStreetNameOnly(matches)

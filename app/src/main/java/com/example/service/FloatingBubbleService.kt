@@ -1516,8 +1516,8 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         }
 
                                         serviceScope.launch(Dispatchers.IO) {
-                                            val existingList = DeliveryApp.instance.personRepository.findPersonsByAddress(editedAddress.trim())
-                                            if (existingList.isNotEmpty()) {
+                                            val existingList = emptyList<Person>()
+                                            if (false) {
                                                 val basePerson = existingList.first()
                                                 val extras = Recebedor.listFromJson(basePerson.coRecebedoresJson).toMutableList()
                                                 val newRecebedor = Recebedor(

@@ -63,26 +63,28 @@ class PeopleViewModel(
             if (person.id > 0) {
                 personRepository.updatePerson(person.copy(dataAtualizacao = System.currentTimeMillis()))
             } else {
-                val existingList = personRepository.findPersonsByAddress(person.endereco)
-                if (existingList.isNotEmpty()) {
-                    val basePerson = existingList.first()
-                    val existingExtras = Recebedor.listFromJson(basePerson.coRecebedoresJson).toMutableList()
-                    val newRec = Recebedor(
-                        id = "co_${System.currentTimeMillis().toString().takeLast(6)}",
-                        nome = person.nome,
-                        documento = person.documento,
-                        assinatura = person.assinatura
-                    )
-                    existingExtras.add(newRec)
-                    val extraFromNew = Recebedor.listFromJson(person.coRecebedoresJson)
-                    existingExtras.addAll(extraFromNew)
-                    val updated = basePerson.copy(
-                        coRecebedoresJson = Recebedor.listToJson(existingExtras.distinctBy { "${it.nome.trim().lowercase()}_${it.documento.trim()}" }),
+                personRepository.insertPerson(person)
+            }
+
+            // Garante que qualquer co-recebedor adicional seja também salvo como um registro individual no banco de dados
+            val extras = Recebedor.listFromJson(person.coRecebedoresJson)
+            for (extra in extras) {
+                if (extra.nome.isNotBlank()) {
+                    val extraPerson = Person(
+                        nome = extra.nome,
+                        documento = extra.documento,
+                        endereco = person.endereco,
+                        numero = person.numero,
+                        complemento = person.complemento,
+                        bairro = person.bairro,
+                        cidade = person.cidade,
+                        uf = person.uf,
+                        observacao = person.observacao,
+                        assinatura = extra.assinatura,
+                        dataCriacao = System.currentTimeMillis(),
                         dataAtualizacao = System.currentTimeMillis()
                     )
-                    personRepository.updatePerson(updated)
-                } else {
-                    personRepository.insertPerson(person)
+                    personRepository.insertPerson(extraPerson)
                 }
             }
             onComplete()

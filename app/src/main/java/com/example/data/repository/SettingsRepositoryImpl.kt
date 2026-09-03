@@ -120,6 +120,11 @@ class SettingsRepositoryImpl(
             pObj.put("documento", p.documento)
             pObj.put("endereco", p.endereco)
             pObj.put("numero", p.numero)
+            pObj.put("complemento", p.complemento)
+            pObj.put("bairro", p.bairro)
+            pObj.put("cidade", p.cidade)
+            pObj.put("uf", p.uf)
+            pObj.put("observacao", p.observacao)
             pObj.put("assinatura", p.assinatura)
             pObj.put("coRecebedoresJson", p.coRecebedoresJson)
             pObj.put("dataCriacao", p.dataCriacao)
@@ -154,24 +159,51 @@ class SettingsRepositoryImpl(
             val newPersons = mutableListOf<Person>()
             for (i in 0 until personsArray.length()) {
                 val pObj = personsArray.getJSONObject(i)
-                newPersons.add(
-                    Person(
-                        id = if (merge) 0 else pObj.optLong("id", 0),
-                        nome = pObj.optString("nome", "Sem Nome"),
-                        documento = pObj.optString("documento", ""),
-                        endereco = pObj.optString("endereco", ""),
-                        numero = pObj.optString("numero", ""),
-                        complemento = "",
-                        bairro = "",
-                        cidade = "",
-                        uf = "",
-                        observacao = "",
-                        assinatura = pObj.optString("assinatura", ""),
-                        coRecebedoresJson = pObj.optString("coRecebedoresJson", ""),
-                        dataCriacao = pObj.optLong("dataCriacao", System.currentTimeMillis()),
-                        dataAtualizacao = pObj.optLong("dataAtualizacao", System.currentTimeMillis())
-                    )
+                val primaryPerson = Person(
+                    id = if (merge) 0 else pObj.optLong("id", 0),
+                    nome = pObj.optString("nome", "Sem Nome"),
+                    documento = pObj.optString("documento", ""),
+                    endereco = pObj.optString("endereco", ""),
+                    numero = pObj.optString("numero", ""),
+                    complemento = pObj.optString("complemento", ""),
+                    bairro = pObj.optString("bairro", ""),
+                    cidade = pObj.optString("cidade", ""),
+                    uf = pObj.optString("uf", "MG"),
+                    observacao = pObj.optString("observacao", ""),
+                    assinatura = pObj.optString("assinatura", ""),
+                    coRecebedoresJson = pObj.optString("coRecebedoresJson", ""),
+                    dataCriacao = pObj.optLong("dataCriacao", System.currentTimeMillis()),
+                    dataAtualizacao = pObj.optLong("dataAtualizacao", System.currentTimeMillis())
                 )
+                newPersons.add(primaryPerson)
+
+                // Extrair e salvar cada co-recebedor como um registro de Pessoa independente no BD
+                val coRecStr = primaryPerson.coRecebedoresJson
+                if (coRecStr.isNotBlank()) {
+                    val extras = com.example.data.model.Recebedor.listFromJson(coRecStr)
+                    for (r in extras) {
+                        if (r.nome.isNotBlank()) {
+                            newPersons.add(
+                                Person(
+                                    id = 0,
+                                    nome = r.nome,
+                                    documento = r.documento,
+                                    endereco = primaryPerson.endereco,
+                                    numero = primaryPerson.numero,
+                                    complemento = primaryPerson.complemento,
+                                    bairro = primaryPerson.bairro,
+                                    cidade = primaryPerson.cidade,
+                                    uf = primaryPerson.uf,
+                                    observacao = primaryPerson.observacao,
+                                    assinatura = r.assinatura,
+                                    coRecebedoresJson = "",
+                                    dataCriacao = primaryPerson.dataCriacao,
+                                    dataAtualizacao = primaryPerson.dataAtualizacao
+                                )
+                            )
+                        }
+                    }
+                }
             }
             personDao.insertAll(newPersons)
             countP = newPersons.size

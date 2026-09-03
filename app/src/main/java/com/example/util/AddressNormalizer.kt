@@ -474,6 +474,14 @@ object AddressNormalizer {
         val nTarget = normalize(target)
 
         if (nQuery.isBlank() || nTarget.isBlank()) return false
+
+        // Validação estrita de número: se ambos têm números extraídos e diferem, não correspondem
+        val parsedQ = parseAddressComponents(query)
+        val parsedT = parseAddressComponents(target)
+        if (parsedQ.number.isNotBlank() && parsedT.number.isNotBlank() && parsedQ.number != parsedT.number) {
+            return false
+        }
+
         if (nTarget.contains(nQuery) || nQuery.contains(nTarget)) return true
 
         val queryTokens = nQuery.split(" ").filter { it.length > 1 }
@@ -533,50 +541,67 @@ object AddressNormalizer {
 
         if (nQuery.isBlank() || nTarget.isBlank()) return false
 
-        if (nQuery == nTarget || nQuery.contains(nTarget) || nTarget.contains(nQuery)) {
-            return true
-        }
+        val parsedQuery = parseAddressComponents(queryAddress)
+        val parsedTarget = parseAddressComponents(
+            rawAddress = targetAddress,
+            rawNumber = targetNumber,
+            rawComplement = targetComplement
+        )
 
-        val queryNumbers = extractNumbers(nQuery)
-        val targetNumbers = if (targetNumber.isNotBlank()) {
-            extractNumbers(targetNumber).ifEmpty { extractNumbers(nTarget) }
-        } else {
-            extractNumbers(nTarget)
-        }
-
-        if (queryNumbers.isNotEmpty() && targetNumbers.isNotEmpty()) {
-            val hasCommonNumber = queryNumbers.any { qNum ->
-                targetNumbers.any { tNum ->
-                    qNum == tNum || 
-                    (qNum.filter { it.isDigit() } == tNum.filter { it.isDigit() } && qNum.filter { it.isDigit() }.isNotEmpty())
-                }
-            }
-            if (!hasCommonNumber) {
+        // 1. Validação estrita do Número do Imóvel / Casa (DEVE SER FEITA ANTES DE CONTAINS)
+        if (parsedQuery.number.isNotBlank() && parsedTarget.number.isNotBlank()) {
+            if (parsedQuery.number != parsedTarget.number) {
+                // Números da casa/imóvel são diferentes (ex: 10 vs 20 ou 10 vs 100) -> NÃO CORRESPONDE
                 return false
             }
-        } else if (queryNumbers.isNotEmpty() && targetNumbers.isEmpty()) {
+        } else if (parsedQuery.number.isNotBlank() && parsedTarget.number.isBlank()) {
+            // Busca especifica número (ex: 10), mas o cadastro não possui número registrado -> NÃO CORRESPONDE
             return false
-        } else if (queryNumbers.isEmpty() && targetNumbers.isNotEmpty()) {
-            val queryWords = extractStreetSignificantWords(nQuery)
-            val targetWords = extractStreetSignificantWords(nTarget)
-            if (queryWords != targetWords) {
+        } else {
+            // Fallback de segurança com extração direta de números se a decomposição de componentes falhou
+            val queryNumbers = extractNumbers(nQuery)
+            val targetNumbers = if (targetNumber.isNotBlank()) {
+                extractNumbers(targetNumber).ifEmpty { extractNumbers(nTarget) }
+            } else {
+                extractNumbers(nTarget)
+            }
+
+            if (queryNumbers.isNotEmpty() && targetNumbers.isNotEmpty()) {
+                val hasCommonNumber = queryNumbers.any { qNum ->
+                    targetNumbers.any { tNum ->
+                        qNum == tNum || 
+                        (qNum.filter { it.isDigit() } == tNum.filter { it.isDigit() } && qNum.filter { it.isDigit() }.isNotEmpty())
+                    }
+                }
+                if (!hasCommonNumber) {
+                    return false
+                }
+            } else if (queryNumbers.isNotEmpty() && targetNumbers.isEmpty()) {
                 return false
             }
         }
 
-        val queryComp = extractComplement(queryAddress)
-        val targetComp = if (targetComplement.isNotBlank()) targetComplement else extractComplement(targetAddress)
-        
+        // 2. Validação de Complemento / Unidade / Apartamento (se informado em ambos)
+        val queryComp = if (parsedQuery.complement.isNotBlank()) parsedQuery.complement else extractComplement(queryAddress)
+        val targetComp = if (parsedTarget.complement.isNotBlank()) parsedTarget.complement else if (targetComplement.isNotBlank()) targetComplement else extractComplement(targetAddress)
+
         if (queryComp.isNotBlank() && targetComp.isNotBlank()) {
             val nQueryComp = normalize(queryComp)
             val nTargetComp = normalize(targetComp)
             val qCompDigits = nQueryComp.filter { it.isDigit() }
             val tCompDigits = nTargetComp.filter { it.isDigit() }
             if (qCompDigits.isNotBlank() && tCompDigits.isNotBlank() && qCompDigits != tCompDigits) {
+                // Apartamentos/unidades diferentes (ex: Apto 101 vs Apto 102) -> NÃO CORRESPONDE
                 return false
             }
         }
 
+        // 3. Se após validações estritas de número e complemento os textos forem idênticos
+        if (nQuery == nTarget) {
+            return true
+        }
+
+        // 4. Validação do Nome da Rua / Logradouro (palavras significativas)
         val queryWords = extractStreetSignificantWords(nQuery)
         val targetWords = extractStreetSignificantWords(nTarget)
 
