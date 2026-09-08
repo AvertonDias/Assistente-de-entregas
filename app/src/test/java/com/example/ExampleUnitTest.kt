@@ -110,4 +110,54 @@ class ExampleUnitTest {
     val parsedRaw = AddressNormalizer.parseAddressComponents(rawAddress)
     println("parsedRaw: street='${parsedRaw.street}', number='${parsedRaw.number}', complement='${parsedRaw.complement}'")
   }
+
+  @Test
+  fun testFourImageAddressCases() {
+    // Caso 1: Jd 1 de Maio;Av Limirio Pereira de Melo;2071 2071, 1 - Monte Santo de Minas/MG
+    val case1 = "Jd 1 de Maio;Av Limirio Pereira de Melo;2071 2071, 1 - Monte Santo de Minas/MG"
+    val parsed1 = AddressNormalizer.parseAddressComponents(case1)
+    assertEquals("Av Limirio Pereira de Melo", parsed1.street)
+    assertEquals("2071", parsed1.number)
+    assertEquals("Jd 1 de Maio", parsed1.neighborhood)
+    val ext1 = AddressNormalizer.extractStreetAndNumber(case1)
+    assertEquals("Av Limirio Pereira de Melo, 2071", ext1)
+    assertTrue(AddressNormalizer.matchesPrecise(case1, "Av Limirio Pereira de Melo", "2071"))
+    assertTrue(AddressNormalizer.matchesPrecise(case1, "Avenida Limirio Pereira de Melo", "2071"))
+    assertTrue(AddressNormalizer.matchesPrecise(case1, "Av Limirio Pereira de Melo, 2071", ""))
+
+    // Caso 2: bela vista;José Augusto filho;200 oficina luz tech preta, 200 - Monte Santo de Minas/MG
+    val case2 = "bela vista;José Augusto filho;200 oficina luz tech preta, 200 - Monte Santo de Minas/MG"
+    val parsed2 = AddressNormalizer.parseAddressComponents(case2)
+    assertEquals("José Augusto Filho", parsed2.street)
+    assertEquals("200", parsed2.number)
+    assertEquals("Bela Vista", parsed2.neighborhood)
+    val ext2 = AddressNormalizer.extractStreetAndNumber(case2)
+    assertEquals("José Augusto Filho, 200", ext2)
+    assertTrue(AddressNormalizer.matchesPrecise(case2, "Rua José Augusto Filho", "200"))
+    assertTrue(AddressNormalizer.matchesPrecise(case2, "José Augusto Filho", "200"))
+    assertTrue(AddressNormalizer.matchesPrecise(case2, "R. Jose Augusto Filho", "200"))
+
+    // Caso 3: Av Limirio Pereira de Melo, 1.843 - Sem Bairro - Monte Santo de Minas/MG
+    val case3 = "Av Limirio Pereira de Melo, 1.843 - Sem Bairro - Monte Santo de Minas/MG"
+    val parsed3 = AddressNormalizer.parseAddressComponents(case3)
+    assertEquals("Av Limirio Pereira de Melo", parsed3.street)
+    assertEquals("1.843", parsed3.number)
+    val ext3 = AddressNormalizer.extractStreetAndNumber(case3)
+    assertEquals("Av Limirio Pereira de Melo, 1.843", ext3)
+    assertTrue(AddressNormalizer.matchesPrecise(case3, "Av Limirio Pereira de Melo", "1843"))
+    assertTrue(AddressNormalizer.matchesPrecise(case3, "Av Limirio Pereira de Melo", "1.843"))
+    assertTrue(AddressNormalizer.matchesPrecise(case3, "Avenida Limírio Pereira de Melo", "1843"))
+
+    // Caso 4: matadouro;São Miguel;404 casa, 404 - Monte Santo de Minas/MG
+    val case4 = "matadouro;São Miguel;404 casa, 404 - Monte Santo de Minas/MG"
+    val parsed4 = AddressNormalizer.parseAddressComponents(case4)
+    assertEquals("São Miguel", parsed4.street)
+    assertEquals("404", parsed4.number)
+    assertEquals("Matadouro", parsed4.neighborhood)
+    val ext4 = AddressNormalizer.extractStreetAndNumber(case4)
+    assertEquals("São Miguel, 404", ext4)
+    assertTrue(AddressNormalizer.matchesPrecise(case4, "Rua São Miguel", "404"))
+    assertTrue(AddressNormalizer.matchesPrecise(case4, "São Miguel", "404"))
+    assertTrue(AddressNormalizer.matchesPrecise(case4, "R. Sao Miguel", "404"))
+  }
 }

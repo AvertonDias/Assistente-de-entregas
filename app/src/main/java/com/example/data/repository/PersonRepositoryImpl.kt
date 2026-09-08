@@ -225,15 +225,19 @@ class PersonRepositoryImpl(
 
         val parsedRaw = AddressNormalizer.parseAddressComponents(rawAddress)
         val numStr = parsedRaw.number.trim()
-        val allNumbersInQuery = AddressNormalizer.extractNumbers(AddressNormalizer.normalize(rawAddress))
+        val allNumbersInQuery = AddressNormalizer.extractNumbers(rawAddress)
         val hasSpecificNumber = numStr.isNotBlank() || allNumbersInQuery.isNotEmpty()
-        val effectiveNumber = numStr.ifBlank { allNumbersInQuery.lastOrNull() ?: "" }
+        val effectiveNumber = numStr.ifBlank { allNumbersInQuery.firstOrNull() ?: "" }
+        val normEffectiveNumber = AddressNormalizer.normalizeNumber(effectiveNumber)
 
-        val sigWords = AddressNormalizer.extractStreetSignificantWords(rawAddress)
+        val sigWords = AddressNormalizer.extractStreetSignificantWords(parsedRaw.street.ifBlank { rawAddress })
         val keyword = sigWords.firstOrNull() ?: ""
 
         // Busca candidatas filtradas via SQL indexado no Room em milissegundos
         var candidates = personDao.findCandidatePersons(effectiveNumber, keyword)
+        if (candidates.isEmpty() && normEffectiveNumber != effectiveNumber && normEffectiveNumber.isNotBlank()) {
+            candidates = personDao.findCandidatePersons(normEffectiveNumber, keyword)
+        }
         if (candidates.isEmpty()) {
             candidates = personDao.getAllPersonsDirect()
         }
@@ -244,6 +248,7 @@ class PersonRepositoryImpl(
             AddressNormalizer.matchesPrecise(rawAddress, p.endereco, p.numero, p.complemento) ||
             AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero}", p.numero, p.complemento) ||
             AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero} ${p.complemento} ${p.bairro} ${p.cidade}", p.numero, p.complemento) ||
+            (parsedRaw.street.isNotBlank() && AddressNormalizer.matchesPrecise("${parsedRaw.street}, ${parsedRaw.number}", p.endereco, p.numero, p.complemento)) ||
             (!hasSpecificNumber && p.endereco.isNotBlank() && AddressNormalizer.matches(rawAddress, p.endereco))
         }.distinctBy { it.id }
 

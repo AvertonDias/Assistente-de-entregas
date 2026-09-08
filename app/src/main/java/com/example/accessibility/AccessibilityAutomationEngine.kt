@@ -678,7 +678,7 @@ object AccessibilityAutomationEngine {
     }
 
     private fun looksLikeAddress(text: String): Boolean {
-        if (text.length < 5) return false
+        if (text.length < 4) return false
         val upper = text.uppercase(Locale.ROOT)
         
         // Evita botões ou comandos de navegação
@@ -686,17 +686,28 @@ object AccessibilityAutomationEngine {
             return false
         }
 
+        // Formato DDA / LOEC com ponto-e-vírgula (ex: "bela vista;José Augusto filho;200...")
+        if (text.contains(";") && text.split(";").count { it.isNotBlank() } >= 2) {
+            return true
+        }
+
+        // Padrão de Cidade/UF no final (ex: "- Monte Santo de Minas/MG" ou "Sem Bairro - Monte Santo de Minas/MG")
+        if (Regex("""(?i)[,\-]\s*[A-Za-zÀ-ÿ\s\.\']{2,40}\s*/\s*(?:AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)\b""").containsMatchIn(text)) {
+            return true
+        }
+
         val triggers = listOf(
             "RUA", "R.", "AVENIDA", "AV.", "AV ", "CORONEL", "CEL.", "ALAMEDA", "AL.",
             "PRAÇA", "PRACA", "PCA.", "TRAVESSA", "TV.", "RODOVIA", "ROD.", "ESTRADA", "EST.",
             "BECO", "VIELA", "LOTEAMENTO", "LOT.", "RESIDENCIAL", "RES.", "CONDOMINIO", "CONDOMÍNIO",
-            "JD", "JARDIM", "VL", "VILA", "BAIRRO", "CENTRO", "Nº", "N°", "NUMERO", "NUM.", "KM"
+            "JD", "JARDIM", "VL", "VILA", "BAIRRO", "CENTRO", "Nº", "N°", "NUMERO", "NUM.", "KM",
+            "SEM BAIRRO", "SEM_BAIRRO"
         )
         val hasTrigger = triggers.any { upper.contains(it) }
         val hasDigits = text.any { it.isDigit() }
         
         // Tem logradouro/bairro ou formato de rua com número (ex: "São João, 120" ou "Brasil, 450")
-        return (hasTrigger && hasDigits) || (hasTrigger && upper.length > 8) || (hasDigits && (text.contains(",") || text.contains("-")) && text.length > 8)
+        return (hasTrigger && hasDigits) || (hasTrigger && upper.length > 8) || (hasDigits && (text.contains(",") || text.contains("-") || text.contains(";")) && text.length > 6)
     }
 
     /**
