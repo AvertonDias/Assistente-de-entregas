@@ -68,7 +68,7 @@ fun SignatureScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFF8FAFC))
+            .background(Color(0xFF0F172A))
     ) {
         SignatureCanvas(
             modifier = Modifier.fillMaxSize(),

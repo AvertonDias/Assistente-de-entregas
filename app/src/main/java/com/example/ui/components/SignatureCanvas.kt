@@ -159,8 +159,8 @@ fun SignatureCanvas(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(if (isDarkTheme) Color(0xFF0F172A) else Color(0xFFF8FAFC))
-            .padding(horizontal = 6.dp, vertical = 4.dp)
+            .background(Color(0xFF0F172A)) // Fundo escuro focado ao redor para dar destaque total ao canvas
+            .padding(horizontal = 8.dp, vertical = 6.dp)
     ) {
         Column(
             modifier = Modifier
@@ -168,7 +168,7 @@ fun SignatureCanvas(
                 .blur(if (showClearConfirmDialog || showDiscardConfirmDialog) 12.dp else 0.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-        // Cabeçalho fino e ultra-compacto para maximizar a área vertical do canvas na orientação paisagem
+        // Cabeçalho fino e ultra-compacto com alto contraste sobre o fundo escuro
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -180,21 +180,21 @@ fun SignatureCanvas(
                 Icon(
                     imageVector = Icons.Default.Draw,
                     contentDescription = null,
-                    tint = if (isDarkTheme) Color(0xFF6EE7B7) else MaterialTheme.colorScheme.primary,
+                    tint = Color(0xFF38BDF8),
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "Área de Assinatura",
-                    fontSize = 13.sp,
+                    fontSize = 13.5.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (isDarkTheme) Color.White else Color(0xFF1E293B)
+                    color = Color.White
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "• Desenhe na área branca",
                     fontSize = 11.sp,
-                    color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B)
+                    color = Color(0xFF94A3B8)
                 )
             }
 
@@ -205,17 +205,17 @@ fun SignatureCanvas(
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "Fechar",
-                    tint = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B),
+                    tint = Color(0xFF94A3B8),
                     modifier = Modifier.size(20.dp)
                 )
             }
         }
 
-        // Barra de Botões compacta e ergonômica na PARTE SUPERIOR da tela
+        // Barra de Botões na parte superior adaptada para o tema escuro focado
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 4.dp),
+                .padding(bottom = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -229,9 +229,12 @@ fun SignatureCanvas(
                     .weight(1f)
                     .height(38.dp)
                     .testTag("clear_signature_button"),
-                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF475569) else Color(0xFFCBD5E1)),
+                border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.6f)),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = if (isDarkTheme) Color(0xFFF87171) else Color(0xFFDC2626)
+                    containerColor = Color(0xFF1E293B),
+                    contentColor = Color(0xFFF87171),
+                    disabledContainerColor = Color(0xFF1E293B).copy(alpha = 0.5f),
+                    disabledContentColor = Color(0xFF64748B)
                 ),
                 shape = RoundedCornerShape(8.dp),
                 contentPadding = PaddingValues(horizontal = 4.dp)
@@ -253,9 +256,12 @@ fun SignatureCanvas(
                     .weight(1f)
                     .height(38.dp)
                     .testTag("undo_signature_button"),
-                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF475569) else Color(0xFFCBD5E1)),
+                border = BorderStroke(1.dp, Color(0xFF475569)),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF334155)
+                    containerColor = Color(0xFF1E293B),
+                    contentColor = Color(0xFFF1F5F9),
+                    disabledContainerColor = Color(0xFF1E293B).copy(alpha = 0.5f),
+                    disabledContentColor = Color(0xFF64748B)
                 ),
                 shape = RoundedCornerShape(8.dp),
                 contentPadding = PaddingValues(horizontal = 4.dp)
@@ -272,9 +278,10 @@ fun SignatureCanvas(
                     .weight(0.9f)
                     .height(38.dp)
                     .testTag("cancel_signature_button"),
-                border = BorderStroke(1.dp, if (isDarkTheme) Color(0xFF475569) else Color(0xFFCBD5E1)),
+                border = BorderStroke(1.dp, Color(0xFF475569)),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF64748B)
+                    containerColor = Color(0xFF1E293B),
+                    contentColor = Color(0xFFCBD5E1)
                 ),
                 shape = RoundedCornerShape(8.dp),
                 contentPadding = PaddingValues(horizontal = 4.dp)
@@ -300,7 +307,10 @@ fun SignatureCanvas(
                     .height(38.dp)
                     .testTag("confirm_signature_button"),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isDarkTheme) Color(0xFF2563EB) else MaterialTheme.colorScheme.primary
+                    containerColor = Color(0xFF16A34A),
+                    contentColor = Color.White,
+                    disabledContainerColor = Color(0xFF1E293B),
+                    disabledContentColor = Color(0xFF64748B)
                 ),
                 shape = RoundedCornerShape(8.dp),
                 contentPadding = PaddingValues(horizontal = 4.dp)
@@ -311,19 +321,19 @@ fun SignatureCanvas(
             }
         }
 
-        // Moldura do Canvas ocupando a área máxima da tela
+        // Moldura do Canvas em BRANCO PURO destacada contra o fundo escuro
         Card(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .padding(vertical = 2.dp)
-                .shadow(2.dp, RoundedCornerShape(8.dp))
+                .shadow(8.dp, RoundedCornerShape(10.dp))
                 .border(
-                    width = 1.5.dp,
-                    color = if (isDarkTheme) Color(0xFF334155) else Color(0xFFCBD5E1),
-                    shape = RoundedCornerShape(8.dp)
+                    width = 2.dp,
+                    color = Color(0xFF38BDF8), // Borda de destaque suave azul/ciano
+                    shape = RoundedCornerShape(10.dp)
                 )
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(10.dp))
                 .testTag("signature_canvas_area"),
             colors = CardDefaults.cardColors(containerColor = Color.White)
         ) {
@@ -443,7 +453,7 @@ fun SignatureCanvas(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.75f))
+                .background(Color.Black.copy(alpha = 0.82f))
                 .clickable(enabled = false) {},
             contentAlignment = Alignment.Center
         ) {
@@ -452,7 +462,8 @@ fun SignatureCanvas(
                     .padding(24.dp)
                     .widthIn(max = 420.dp),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) Color(0xFF1E293B) else Color.White),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                border = BorderStroke(1.dp, Color(0xFF334155)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
             ) {
                 Column(
@@ -463,19 +474,19 @@ fun SignatureCanvas(
                     Icon(
                         imageVector = Icons.Default.Clear,
                         contentDescription = null,
-                        tint = Color(0xFFDC2626),
+                        tint = Color(0xFFEF4444),
                         modifier = Modifier.size(36.dp)
                     )
                     Text(
                         text = "Limpar toda a assinatura?",
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp,
-                        color = if (isDarkTheme) Color.White else Color(0xFF0F172A)
+                        color = Color.White
                     )
                     Text(
                         text = "Todos os traços desenhados na tela serão apagados. Deseja continuar?",
                         fontSize = 13.5.sp,
-                        color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF475569),
+                        color = Color(0xFFCBD5E1),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                     Row(
@@ -487,6 +498,8 @@ fun SignatureCanvas(
                         OutlinedButton(
                             onClick = { showClearConfirmDialog = false },
                             modifier = Modifier.weight(1f),
+                            border = BorderStroke(1.dp, Color(0xFF475569)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE2E8F0)),
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Text("Cancelar")
@@ -514,7 +527,7 @@ fun SignatureCanvas(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.75f))
+                .background(Color.Black.copy(alpha = 0.82f))
                 .clickable(enabled = false) {},
             contentAlignment = Alignment.Center
         ) {
@@ -523,7 +536,8 @@ fun SignatureCanvas(
                     .padding(24.dp)
                     .widthIn(max = 420.dp),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) Color(0xFF1E293B) else Color.White),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                border = BorderStroke(1.dp, Color(0xFF334155)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
             ) {
                 Column(
@@ -534,19 +548,19 @@ fun SignatureCanvas(
                     Icon(
                         imageVector = Icons.Default.Warning,
                         contentDescription = null,
-                        tint = Color(0xFFE65100),
+                        tint = Color(0xFFF59E0B),
                         modifier = Modifier.size(36.dp)
                     )
                     Text(
                         text = "Descartar assinatura?",
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp,
-                        color = if (isDarkTheme) Color.White else Color(0xFF0F172A)
+                        color = Color.White
                     )
                     Text(
                         text = "Você desenhou uma assinatura que ainda não foi salva. Deseja realmente sair sem salvar?",
                         fontSize = 13.5.sp,
-                        color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF475569),
+                        color = Color(0xFFCBD5E1),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                     Row(
@@ -558,6 +572,8 @@ fun SignatureCanvas(
                         OutlinedButton(
                             onClick = { showDiscardConfirmDialog = false },
                             modifier = Modifier.weight(1f),
+                            border = BorderStroke(1.dp, Color(0xFF475569)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE2E8F0)),
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Text("Continuar")
@@ -568,7 +584,7 @@ fun SignatureCanvas(
                                 onCancel()
                             },
                             modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Text("Descartar e Sair", fontWeight = FontWeight.Bold)

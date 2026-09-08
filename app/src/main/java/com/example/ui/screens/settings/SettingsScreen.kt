@@ -2,6 +2,7 @@ package com.example.ui.screens.settings
 
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +36,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -97,13 +99,14 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     settingsRepository: SettingsRepository,
     firebaseSyncRepository: FirebaseSyncRepository? = null,
+    viewModel: SettingsViewModel? = null,
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val settings by settingsRepository.getSettings().collectAsState(initial = AppSettings())
-    val syncState by (firebaseSyncRepository?.syncState?.collectAsState(initial = SyncState.Idle)
-        ?: remember { mutableStateOf(SyncState.Idle) })
+    val settings by (viewModel?.settings ?: settingsRepository.getSettings()).collectAsState(initial = AppSettings())
+    val syncStateFlow = viewModel?.syncState ?: firebaseSyncRepository?.syncState
+    val syncState by (syncStateFlow?.collectAsState(initial = SyncState.Idle) ?: remember { mutableStateOf(SyncState.Idle) })
 
     var showExportDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
@@ -188,8 +191,59 @@ fun SettingsScreen(
                             color = Color(0xFF3C4043)
                         )
 
-                        // Status da última sincronização
+                        // Status da última sincronização ou barra de progresso em andamento
                         when (val state = syncState) {
+                            is SyncState.Syncing -> {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = Color(0xFFD3E3FD),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = state.stepMessage,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF041E49),
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            if (state.progress >= 0f) {
+                                                Text(
+                                                    text = "${(state.progress * 100).toInt()}%",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFF041E49)
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        if (state.progress >= 0f) {
+                                            val animatedProgress by animateFloatAsState(
+                                                targetValue = state.progress.coerceIn(0f, 1f),
+                                                label = "sync_progress"
+                                            )
+                                            LinearProgressIndicator(
+                                                progress = { animatedProgress },
+                                                modifier = Modifier.fillMaxWidth().height(8.dp),
+                                                color = Color(0xFF1967D2),
+                                                trackColor = Color.White
+                                            )
+                                        } else {
+                                            LinearProgressIndicator(
+                                                modifier = Modifier.fillMaxWidth().height(8.dp),
+                                                color = Color(0xFF1967D2),
+                                                trackColor = Color.White
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             is SyncState.Success -> {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
@@ -217,41 +271,79 @@ fun SettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            val isSyncing = syncState is SyncState.Syncing
+
                             Button(
                                 onClick = {
-                                    scope.launch {
-                                        val res = firebaseSyncRepository.syncAllToCloud()
-                                        if (res is SyncState.Success) {
-                                            Toast.makeText(context, res.message, Toast.LENGTH_SHORT).show()
+                                    if (viewModel != null) {
+                                        viewModel.exportRoomToFirestore { res ->
+                                            if (res is SyncState.Success) {
+                                                Toast.makeText(context, res.message, Toast.LENGTH_SHORT).show()
+                                            } else if (res is SyncState.Error) {
+                                                Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    } else {
+                                        scope.launch {
+                                            val res = firebaseSyncRepository?.syncAllToCloud()
+                                            if (res is SyncState.Success) {
+                                                Toast.makeText(context, res.message, Toast.LENGTH_SHORT).show()
+                                            } else if (res is SyncState.Error) {
+                                                Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                            }
                                         }
                                     }
                                 },
-                                enabled = syncState !is SyncState.Syncing,
+                                enabled = !isSyncing,
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(10.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1967D2))
                             ) {
-                                Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("ENVIAR", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                if (isSyncing) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("ENVIANDO...", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                } else {
+                                    Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("ENVIAR", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
 
                             OutlinedButton(
                                 onClick = {
-                                    scope.launch {
-                                        val res = firebaseSyncRepository.fetchAllFromCloud()
-                                        if (res is SyncState.Success) {
-                                            Toast.makeText(context, res.message, Toast.LENGTH_SHORT).show()
+                                    if (viewModel != null) {
+                                        viewModel.importFromFirestore { res ->
+                                            if (res is SyncState.Success) {
+                                                Toast.makeText(context, res.message, Toast.LENGTH_SHORT).show()
+                                            } else if (res is SyncState.Error) {
+                                                Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    } else {
+                                        scope.launch {
+                                            val res = firebaseSyncRepository?.fetchAllFromCloud()
+                                            if (res is SyncState.Success) {
+                                                Toast.makeText(context, res.message, Toast.LENGTH_SHORT).show()
+                                            } else if (res is SyncState.Error) {
+                                                Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                            }
                                         }
                                     }
                                 },
-                                enabled = syncState !is SyncState.Syncing,
+                                enabled = !isSyncing,
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("BAIXAR", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                if (isSyncing) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color(0xFF1967D2), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("BAIXANDO...", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                } else {
+                                    Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("BAIXAR", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -304,49 +396,6 @@ fun SettingsScreen(
                         valueRange = 44f..72f,
                         steps = 6
                     )
-                }
-            }
-
-            // Seção de Aparência & Tema (Dark Mode)
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("theme_settings_card"),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "APARÊNCIA & TEMA",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "O aplicativo está configurado exclusivamente para o Modo Claro.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { scope.launch { settingsRepository.setThemeMode("LIGHT") } },
-                            modifier = Modifier.fillMaxWidth().height(44.dp),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        ) {
-                            Icon(Icons.Default.LightMode, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Modo Claro Ativo", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
                 }
             }
 

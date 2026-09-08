@@ -12,6 +12,155 @@ import java.util.Locale
 object SpeechHelper {
 
     /**
+     * Processa a fala para logradouro / rua / avenida:
+     * - Remove palavras introdutórias ("a rua é", "endereço é", "rua é", "o endereço é")
+     * - Capitaliza cada palavra
+     */
+    fun processSpokenStreet(rawSpoken: String): String {
+        if (rawSpoken.isBlank()) return ""
+
+        var cleaned = rawSpoken.trim()
+        val prefixesToRemove = listOf(
+            "^o endereço é\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^o endereco e\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^endereço é\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^endereco e\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^endereço\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^endereco\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^a rua é\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^a rua e\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^rua é\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^rua e\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^a avenida é\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^avenida é\\s+".toRegex(RegexOption.IGNORE_CASE)
+        )
+
+        for (regex in prefixesToRemove) {
+            cleaned = cleaned.replace(regex, "")
+        }
+
+        return AddressNormalizer.capitalizeWords(cleaned.trim())
+    }
+
+    /**
+     * Processa a fala para números de residência:
+     * - Converte números falados ("cento e vinte", "meia", "sem número")
+     * - Retorna os dígitos ou texto do número limpo
+     */
+    fun processSpokenNumber(rawSpoken: String): String {
+        if (rawSpoken.isBlank()) return ""
+
+        var text = rawSpoken.lowercase(Locale.getDefault()).trim()
+
+        if (text.contains("sem número") || text.contains("sem numero") || text == "sn" || text == "s n") {
+            return "S/N"
+        }
+
+        val prefixes = listOf(
+            "o número é", "o numero e", "número é", "numero e", "número", "numero", "nº", "n"
+        )
+        for (p in prefixes) {
+            if (text.startsWith(p)) {
+                text = text.removePrefix(p).trim()
+            }
+        }
+
+        // Conversões comuns faladas para números
+        val wordNumbers = listOf(
+            "zero" to "0", "meia" to "6", "um" to "1", "uma" to "1", "dois" to "2", "duas" to "2",
+            "três" to "3", "tres" to "3", "quatro" to "4", "cinco" to "5", "seis" to "6",
+            "sete" to "7", "oito" to "8", "nove" to "9", "dez" to "10", "onze" to "11",
+            "doze" to "12", "treze" to "13", "quatorze" to "14", "catorze" to "14", "quinze" to "15",
+            "dezesseis" to "16", "dezessete" to "17", "dezoito" to "18", "dezenove" to "19",
+            "vinte" to "20", "trinta" to "30", "quarenta" to "40", "cinquenta" to "50",
+            "sessenta" to "60", "setenta" to "70", "oitenta" to "80", "noventa" to "90",
+            "cem" to "100", "duzentos" to "200", "trezentos" to "300", "quatrocentos" to "400",
+            "quinhentos" to "500", "seiscentos" to "600", "setecentos" to "700",
+            "oitocentos" to "800", "novecentos" to "900", "mil" to "1000"
+        )
+
+        // Se já tiver dígitos, pega os dígitos e letras anexadas (ex: 123A, 45B)
+        val directDigits = text.filter { it.isDigit() }
+        if (directDigits.isNotEmpty()) {
+            return text.replace(" ", "").uppercase(Locale.getDefault())
+        }
+
+        // Tenta substituir palavras por dígitos se falou dígito a dígito
+        var converted = text
+        for ((word, digit) in wordNumbers) {
+            converted = converted.replace(Regex("\\b$word\\b", RegexOption.IGNORE_CASE), digit)
+        }
+        val resultingDigits = converted.filter { it.isDigit() }
+        if (resultingDigits.isNotEmpty()) {
+            return resultingDigits
+        }
+
+        return AddressNormalizer.capitalizeWords(text.trim())
+    }
+
+    /**
+     * Processa a fala para complemento / unidade (Apto, Bloco, Casa, Fundos):
+     */
+    fun processSpokenComplement(rawSpoken: String): String {
+        if (rawSpoken.isBlank()) return ""
+
+        var text = rawSpoken.trim()
+        val prefixes = listOf(
+            "^o complemento é\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^complemento é\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^complemento\\s+".toRegex(RegexOption.IGNORE_CASE)
+        )
+        for (r in prefixes) {
+            text = text.replace(r, "")
+        }
+
+        return AddressNormalizer.capitalizeWords(text.trim())
+    }
+
+    /**
+     * Processa a fala para bairro:
+     */
+    fun processSpokenNeighborhood(rawSpoken: String): String {
+        if (rawSpoken.isBlank()) return ""
+
+        var text = rawSpoken.trim()
+        val prefixes = listOf(
+            "^o bairro é\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^o bairro e\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^bairro é\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^bairro e\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^bairro\\s+".toRegex(RegexOption.IGNORE_CASE)
+        )
+        for (r in prefixes) {
+            text = text.replace(r, "")
+        }
+
+        return AddressNormalizer.capitalizeWords(text.trim())
+    }
+
+    /**
+     * Processa a fala para busca / pesquisa:
+     */
+    fun processSpokenSearch(rawSpoken: String): String {
+        if (rawSpoken.isBlank()) return ""
+
+        var text = rawSpoken.trim()
+        val prefixes = listOf(
+            "^pesquisar\\s+por\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^pesquisar\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^buscar\\s+por\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^buscar\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^procurar\\s+por\\s+".toRegex(RegexOption.IGNORE_CASE),
+            "^procurar\\s+".toRegex(RegexOption.IGNORE_CASE)
+        )
+        for (r in prefixes) {
+            text = text.replace(r, "")
+        }
+
+        return text.trim()
+    }
+
+    /**
      * Processa a fala para nomes de pessoas:
      * - Remove palavras introdutórias ("o nome é", "chama", "nome")
      * - Capitaliza cada palavra ("maria da silva" -> "Maria Da Silva")

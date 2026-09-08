@@ -176,43 +176,24 @@ class SettingsRepositoryImpl(
                     dataAtualizacao = pObj.optLong("dataAtualizacao", System.currentTimeMillis())
                 )
                 newPersons.add(primaryPerson)
-
-                // Extrair e salvar cada co-recebedor como um registro de Pessoa independente no BD
-                val coRecStr = primaryPerson.coRecebedoresJson
-                if (coRecStr.isNotBlank()) {
-                    val extras = com.example.data.model.Recebedor.listFromJson(coRecStr)
-                    for (r in extras) {
-                        if (r.nome.isNotBlank()) {
-                            newPersons.add(
-                                Person(
-                                    id = 0,
-                                    nome = r.nome,
-                                    documento = r.documento,
-                                    endereco = primaryPerson.endereco,
-                                    numero = primaryPerson.numero,
-                                    complemento = primaryPerson.complemento,
-                                    bairro = primaryPerson.bairro,
-                                    cidade = primaryPerson.cidade,
-                                    uf = primaryPerson.uf,
-                                    observacao = primaryPerson.observacao,
-                                    assinatura = r.assinatura,
-                                    coRecebedoresJson = "",
-                                    dataCriacao = primaryPerson.dataCriacao,
-                                    dataAtualizacao = primaryPerson.dataAtualizacao
-                                )
-                            )
-                        }
-                    }
-                }
             }
-            personDao.insertAll(newPersons)
+            newPersons.chunked(50).forEach { chunk ->
+                personDao.insertAll(chunk)
+            }
             countP = newPersons.size
+
+            // Unifica automaticamente múltiplos destinatários que compartilham o mesmo endereço
+            try {
+                com.example.DeliveryApp.instance.personRepository.consolidateDuplicateAddressPersons()
+            } catch (_: Throwable) {}
+
+            val finalTotal = personDao.countPersons()
 
             ImportResult(
                 success = true,
-                importedPersons = countP,
+                importedPersons = finalTotal,
                 importedDeliveries = 0,
-                message = "Importação concluída com sucesso ($countP destinatários)."
+                message = "Importação concluída: $finalTotal endereços carregados com todos os recebedores preservados."
             )
         } catch (e: Exception) {
             ImportResult(false, message = "Erro ao processar JSON: ${e.localizedMessage}")

@@ -1,6 +1,22 @@
 # 📦 Assistente de Entregas
 
+[![Version](https://img.shields.io/badge/version-1.1.6-blue.svg)](https://github.com/AvertonDias/Assistente-de-entregas/releases/tag/v1.1.6)
+[![Platform](https://img.shields.io/badge/platform-Android-green.svg)](https://developer.android.com)
+
 > **Assistente flutuante nativo para otimização de rotas e preenchimento automático em aplicativos de entrega.**
+
+---
+
+### 🌟 Última Versão: `v1.1.6`
+- **Título**: *Sincronização com Barra de Progresso, Feedback Sonoro Aprimorado e Interface Otimizada*
+- **Principais Novidades**:
+  - 📊 Barra de progresso em tempo real durante a sincronização em nuvem (Upload e Download).
+  - 🔊 Feedback sonoro de sucesso reformulado, mais audível e compatível com todos os dispositivos.
+  - 🎨 Interface limpa e ajustes no layout dos botões do balão flutuante.
+  - 🎙️ Suporte a reconhecimento de voz (microfone) em todos os campos de texto.
+  - 📄 Veja o [RELEASE_NOTES.md](./RELEASE_NOTES.md) completo.
+
+---
 
 O **Assistente de Entregas** é uma solução Android avançada desenvolvida com **Kotlin** e **Jetpack Compose**. O aplicativo combina um **Balão Flutuante (Overlay)** interativo com um **Serviço de Acessibilidade** especializado para detectar endereços, identificar recebedores cadastrados e automatizar o preenchimento de formulários (nome, documento e assinatura digital) diretamente nos aplicativos de entrega parceiros.
 

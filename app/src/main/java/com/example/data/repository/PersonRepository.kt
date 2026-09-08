@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.Flow
 
 interface PersonRepository {
     fun getAllPersons(): Flow<List<Person>>
+    suspend fun getAllPersonsDirect(): List<Person>
     fun getPersonById(id: Long): Flow<Person?>
     suspend fun getPersonByIdDirect(id: Long): Person?
     fun searchPersons(query: String): Flow<List<Person>>
@@ -17,4 +18,7 @@ interface PersonRepository {
     suspend fun countPersons(): Int
     suspend fun cleanupInactiveReceiversOlderThan5Years(): Int
     suspend fun markPersonUsed(id: Long)
+    suspend fun prioritizeRecebedor(personId: Long, recebedorId: String): Person?
+    suspend fun consolidateDuplicateAddressPersons(): Int
+    suspend fun sanitizeCorruptedAddressRecords(): Int
 }

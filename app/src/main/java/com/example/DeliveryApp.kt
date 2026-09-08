@@ -19,6 +19,7 @@ import com.example.data.repository.SignatureRepositoryImpl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class DeliveryApp : Application() {
 
@@ -37,7 +38,16 @@ class DeliveryApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        bypassHiddenApiRestrictions()
+
+        // Aumenta o tamanho da CursorWindow para prevenir erros ao carregar muitos destinatários ou assinaturas
+        try {
+            val field = android.database.CursorWindow::class.java.getDeclaredField("sCursorWindowSize")
+            field.isAccessible = true
+            field.set(null, 100 * 1024 * 1024) // 100MB
+        } catch (e: Throwable) {
+            Log.d("DeliveryApp", "CursorWindowSize custom config: ${e.message}")
+        }
+
         try {
             if (FirebaseApp.getApps(this).isEmpty()) {
                 val app = FirebaseApp.initializeApp(this)
@@ -65,26 +75,13 @@ class DeliveryApp : Application() {
             }
         }
         com.example.util.CrashReporter.init(this)
-    }
 
-    private fun bypassHiddenApiRestrictions() {
-        try {
-            val vmRuntimeClass = Class.forName("dalvik.system.VMRuntime")
-            val getRuntimeMethod = vmRuntimeClass.getDeclaredMethod("getRuntime")
-            val vmRuntime = getRuntimeMethod.invoke(null)
-            val setHiddenApiExemptionsMethod = vmRuntimeClass.getDeclaredMethod(
-                "setHiddenApiExemptions",
-                Array<String>::class.java
-            )
-            setHiddenApiExemptionsMethod.invoke(
-                vmRuntime,
-                arrayOf(
-                    "Landroid/view/accessibility/AccessibilityNodeInfo;",
-                    "Landroid/view/accessibility/"
-                )
-            )
-        } catch (e: Throwable) {
-            Log.d("DeliveryApp", "HiddenApiBypass: ${e.message}")
+        applicationScope.launch(Dispatchers.IO) {
+            try {
+                personRepository.consolidateDuplicateAddressPersons()
+            } catch (e: Throwable) {
+                Log.w("DeliveryApp", "Auto consolidation on startup: ${e.message}")
+            }
         }
     }
 

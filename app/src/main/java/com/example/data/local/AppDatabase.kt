@@ -5,6 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.room.migration.Migration
 import com.example.data.local.dao.DeliveryDao
 import com.example.data.local.dao.PersonDao
 import com.example.data.local.entity.Delivery
@@ -15,7 +16,7 @@ import kotlinx.coroutines.launch
 
 @Database(
     entities = [Person::class, Delivery::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -27,6 +28,15 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_pessoas_endereco` ON `pessoas` (`endereco`)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_pessoas_numero` ON `pessoas` (`numero`)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_pessoas_nome` ON `pessoas` (`nome`)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_pessoas_dataAtualizacao` ON `pessoas` (`dataAtualizacao`)")
+            }
+        }
+
         fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -34,6 +44,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "assistente_entregas.db"
                 )
+                    .addMigrations(MIGRATION_2_3)
                     .addCallback(DatabaseCallback(scope))
                     .fallbackToDestructiveMigration()
                     .build()

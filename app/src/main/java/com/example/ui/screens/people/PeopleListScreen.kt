@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,13 +35,18 @@ import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -61,12 +71,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import com.example.data.local.entity.Person
 import com.example.data.model.Recebedor
 import com.example.ui.components.DialogBlurEffect
+import com.example.ui.components.VoiceInputIconButton
 import com.example.ui.navigation.Screen
 import com.example.util.AddressNormalizer
 import com.example.util.ClipboardHelper
+import com.example.util.FeedbackHelper
+import com.example.util.SpeechHelper
+
+private data class ReceiverDeleteTarget(
+    val person: Person,
+    val index: Int,
+    val receiver: Recebedor
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,6 +100,34 @@ fun PeopleListScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
 
     var personToDelete by remember { mutableStateOf<Person?>(null) }
+    var receiverToDelete by remember { mutableStateOf<ReceiverDeleteTarget?>(null) }
+    var filterOnlyMultipleReceivers by remember { mutableStateOf(false) }
+
+    fun hasMultipleReceivers(person: Person): Boolean {
+        if (person.coRecebedoresJson.isNotBlank()) {
+            try {
+                val extras = Recebedor.listFromJson(person.coRecebedoresJson)
+                val validExtras = extras.count { it.nome.isNotBlank() || it.documento.isNotBlank() }
+                val hasMain = person.nome.isNotBlank() || person.documento.isNotBlank()
+                return ((if (hasMain) 1 else 0) + validExtras) > 1
+            } catch (_: Throwable) {
+                return true
+            }
+        }
+        return false
+    }
+
+    val multipleCount = remember(persons) {
+        persons.count { hasMultipleReceivers(it) }
+    }
+
+    val filteredPersons = remember(persons, filterOnlyMultipleReceivers) {
+        if (!filterOnlyMultipleReceivers) {
+            persons
+        } else {
+            persons.filter { hasMultipleReceivers(it) }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -104,121 +152,352 @@ fun PeopleListScreen(
             }
         }
     ) { innerPadding ->
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .background(MaterialTheme.colorScheme.background)
-                .blur(if (personToDelete != null) 12.dp else 0.dp),
+                .blur(if (personToDelete != null || receiverToDelete != null) 12.dp else 0.dp),
             contentAlignment = Alignment.TopCenter
         ) {
+            val isWideScreen = maxWidth >= 720.dp
+            val contentMaxWidth = if (isWideScreen) 1100.dp else 650.dp
+
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .widthIn(max = 700.dp)
+                    .widthIn(max = contentMaxWidth)
             ) {
                 // Campo de Pesquisa Inteligente
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { viewModel.onSearchQueryChanged(it) },
-                    placeholder = { Text("Pesquisar por nome, endereço, doc, bairro...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (searchQuery.isNotBlank()) {
-                            IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
-                                Icon(Icons.Default.Clear, contentDescription = "Limpar busca")
-                            }
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("search_people_input"),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surface,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    singleLine = true
-                )
-            }
-
-            if (persons.isEmpty()) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .padding(start = if (isWideScreen) 24.dp else 16.dp, end = if (isWideScreen) 24.dp else 16.dp, top = 12.dp, bottom = 6.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.Person,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = Color.LightGray
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = if (searchQuery.isBlank()) "Nenhuma pessoa cadastrada ainda." else "Nenhum resultado para \"$searchQuery\".",
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { viewModel.onSearchQueryChanged(it) },
+                        placeholder = { Text("Pesquisar por rua, número da rua ou nome...") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (searchQuery.isNotBlank()) {
+                                    IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Limpar busca")
+                                    }
+                                }
+                                VoiceInputIconButton(
+                                    hintPrompt = "Fale o nome, rua ou número...",
+                                    onResult = { spoken ->
+                                        val clean = SpeechHelper.processSpokenSearch(spoken)
+                                        if (clean.isNotBlank()) {
+                                            viewModel.onSearchQueryChanged(clean)
+                                        }
+                                    }
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("search_people_input"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        singleLine = true
+                    )
                 }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 88.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    item {
-                        Text(
-                            text = "${persons.size} ${if (persons.size == 1) "destinatário cadastrado" else "destinatários cadastrados"}",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
 
-                    items(persons, key = { it.id }) { person ->
-                        PersonCardItem(
-                            person = person,
-                            onEdit = { onNavigate(Screen.PersonEdit.createRoute(person.id)) },
-                            onDelete = { personToDelete = person },
-                            onCopyName = { ClipboardHelper.copyToClipboard(context, "Nome", person.nome) },
-                            onCopyDoc = { ClipboardHelper.copyToClipboard(context, "Documento", person.documento) }
-                        )
+                // Seletor para mostrar apenas endereços com mais de um recebedor
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = if (isWideScreen) 24.dp else 16.dp, end = if (isWideScreen) 24.dp else 16.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = filterOnlyMultipleReceivers,
+                        onClick = { filterOnlyMultipleReceivers = !filterOnlyMultipleReceivers },
+                        label = {
+                            Text(
+                                text = if (filterOnlyMultipleReceivers) {
+                                    "Apenas com +1 recebedor ($multipleCount)"
+                                } else {
+                                    "Mais de 1 recebedor ($multipleCount)"
+                                },
+                                fontSize = 12.sp,
+                                fontWeight = if (filterOnlyMultipleReceivers) FontWeight.Bold else FontWeight.Medium
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.People,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier.testTag("filter_multiple_receivers_chip")
+                    )
+                }
+
+                if (filteredPersons.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = if (filterOnlyMultipleReceivers) Icons.Default.People else Icons.Default.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = Color.LightGray
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = if (filterOnlyMultipleReceivers) {
+                                    "Nenhum endereço com múltiplos recebedores encontrado."
+                                } else if (searchQuery.isBlank()) {
+                                    "Nenhuma pessoa cadastrada ainda."
+                                } else {
+                                    "Nenhum resultado para \"$searchQuery\"."
+                                },
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else {
+                    // Layout Responsivo: Grade de 2 colunas para PC / telas largas e 1 coluna para celular
+                    if (isWideScreen) {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 88.dp),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            item(span = { GridItemSpan(2) }) {
+                                Text(
+                                    text = if (filterOnlyMultipleReceivers) {
+                                        "${filteredPersons.size} endereço(s) com mais de 1 recebedor"
+                                    } else {
+                                        "${filteredPersons.size} ${if (filteredPersons.size == 1) "endereço cadastrado" else "endereços cadastrados"}"
+                                    },
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+
+                            items(
+                                items = filteredPersons,
+                                key = { person -> if (person.id > 0) "p_${person.id}" else "p_${person.endereco}_${person.numero}_${person.nome}_${person.dataCriacao}" }
+                            ) { person ->
+                                PersonCardItem(
+                                    person = person,
+                                    onEdit = { onNavigate(Screen.PersonEdit.createRoute(person.id)) },
+                                    onDelete = { personToDelete = person },
+                                    onDeleteReceiver = { index, receiver ->
+                                        receiverToDelete = ReceiverDeleteTarget(person, index, receiver)
+                                    },
+                                    onCopyName = { ClipboardHelper.copyToClipboard(context, "Nome", person.nome) },
+                                    onCopyDoc = { ClipboardHelper.copyToClipboard(context, "Documento", person.documento) }
+                                )
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 88.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            item {
+                                Text(
+                                    text = if (filterOnlyMultipleReceivers) {
+                                        "${filteredPersons.size} endereço(s) com mais de 1 recebedor"
+                                    } else {
+                                        "${filteredPersons.size} ${if (filteredPersons.size == 1) "endereço cadastrado" else "endereços cadastrados"}"
+                                    },
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+
+                            items(
+                                items = filteredPersons,
+                                key = { person -> if (person.id > 0) "p_${person.id}" else "p_${person.endereco}_${person.numero}_${person.nome}_${person.dataCriacao}" }
+                            ) { person ->
+                                PersonCardItem(
+                                    person = person,
+                                    onEdit = { onNavigate(Screen.PersonEdit.createRoute(person.id)) },
+                                    onDelete = { personToDelete = person },
+                                    onDeleteReceiver = { index, receiver ->
+                                        receiverToDelete = ReceiverDeleteTarget(person, index, receiver)
+                                    },
+                                    onCopyName = { ClipboardHelper.copyToClipboard(context, "Nome", person.nome) },
+                                    onCopyDoc = { ClipboardHelper.copyToClipboard(context, "Documento", person.documento) }
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
-    }
 
-        // Diálogo de Confirmação de Exclusão
+        // Diálogo de Confirmação para Remoção de Recebedor Específico
+        if (receiverToDelete != null) {
+            val target = receiverToDelete!!
+            val remainingCount = remember(target.person) {
+                val list = mutableListOf<Recebedor>()
+                if (target.person.nome.isNotBlank() || target.person.documento.isNotBlank()) {
+                    list.add(Recebedor(id = "main", nome = target.person.nome, documento = target.person.documento, assinatura = target.person.assinatura))
+                }
+                if (target.person.coRecebedoresJson.isNotBlank()) {
+                    try {
+                        list.addAll(Recebedor.listFromJson(target.person.coRecebedoresJson))
+                    } catch (_: Throwable) {}
+                }
+                (list.size - 1).coerceAtLeast(0)
+            }
+
+            AlertDialog(
+                onDismissRequest = { receiverToDelete = null },
+                title = {
+                    DialogBlurEffect()
+                    Text("Remover Recebedor", fontWeight = FontWeight.Bold)
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Deseja realmente remover este recebedor do endereço?")
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = "👤 ${target.receiver.nome.ifBlank { "Sem nome" }}",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                if (target.receiver.documento.isNotBlank()) {
+                                    Text(
+                                        text = "📄 Doc: ${target.receiver.documento}",
+                                        fontSize = 12.5.sp,
+                                        color = Color.Gray,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "📍 ${target.person.endereco}, Nº ${target.person.numero}",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "✓ O endereço e os demais $remainingCount recebedor(es) continuarão cadastrados normalmente.",
+                            fontSize = 12.sp,
+                            color = Color(0xFF2E7D32),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.removeReceiverFromPerson(target.person, target.index)
+                            receiverToDelete = null
+                            FeedbackHelper.triggerSuccess(context)
+                            Toast.makeText(context, "Recebedor removido com sucesso!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("REMOVER", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { receiverToDelete = null }) {
+                        Text("CANCELAR")
+                    }
+                }
+            )
+        }
+
+        // Diálogo de Confirmação de Exclusão de Cadastro / Endereço Completo
         if (personToDelete != null) {
+            val target = personToDelete!!
+            val targetReceivers = remember(target) {
+                val list = mutableListOf<Recebedor>()
+                if (target.nome.isNotBlank() || target.documento.isNotBlank()) {
+                    list.add(Recebedor(id = "main", nome = target.nome, documento = target.documento, assinatura = target.assinatura))
+                }
+                if (target.coRecebedoresJson.isNotBlank()) {
+                    try {
+                        list.addAll(Recebedor.listFromJson(target.coRecebedoresJson))
+                    } catch (_: Throwable) {}
+                }
+                list
+            }
+            val isMultiple = targetReceivers.size > 1
+
             AlertDialog(
                 onDismissRequest = { personToDelete = null },
                 title = {
                     DialogBlurEffect()
-                    Text("Excluir Cadastro")
+                    Text(if (isMultiple) "Excluir Endereço Completo?" else "Excluir Cadastro", fontWeight = FontWeight.Bold)
                 },
-                text = { Text("Deseja realmente excluir o cadastro de ${personToDelete?.nome}? Esta ação não pode ser desfeita.") },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            personToDelete?.let { viewModel.deletePerson(it) }
-                            personToDelete = null
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (isMultiple) {
+                            Text(
+                                text = "Atenção: este endereço possui ${targetReceivers.size} recebedores cadastrados:",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            targetReceivers.forEach { r ->
+                                Text(
+                                    text = "• ${r.nome.ifBlank { "Sem nome" }}${if (r.documento.isNotBlank()) " (Doc: ${r.documento})" else ""}",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Excluir aqui apagará o ENDEREÇO e TODOS os ${targetReceivers.size} recebedores.\n\n💡 Dica: para remover apenas um recebedor, clique no botão \"Remover\" ao lado do nome dele no cartão.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        } else {
+                            Text("Deseja realmente excluir o cadastro de ${target.nome.ifBlank { "Destinatário" }} (${target.endereco}, Nº ${target.numero})? Esta ação não pode ser desfeita.")
                         }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.deletePerson(target)
+                            personToDelete = null
+                            FeedbackHelper.triggerSuccess(context)
+                            Toast.makeText(context, "Cadastro excluído!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) {
-                        Text("EXCLUIR", color = Color(0xFFC62828), fontWeight = FontWeight.Bold)
+                        Text(if (isMultiple) "EXCLUIR TUDO" else "EXCLUIR", fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { personToDelete = null }) {
+                    OutlinedButton(onClick = { personToDelete = null }) {
                         Text("CANCELAR")
                     }
                 }
@@ -232,6 +511,7 @@ private fun PersonCardItem(
     person: Person,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onDeleteReceiver: (Int, Recebedor) -> Unit,
     onCopyName: () -> Unit,
     onCopyDoc: () -> Unit
 ) {
@@ -250,7 +530,11 @@ private fun PersonCardItem(
         if (person.nome.isNotBlank() || person.documento.isNotBlank()) {
             list.add(Recebedor(id = "main", nome = person.nome, documento = person.documento, assinatura = person.assinatura))
         }
-        list.addAll(Recebedor.listFromJson(person.coRecebedoresJson))
+        if (person.coRecebedoresJson.isNotBlank()) {
+            try {
+                list.addAll(Recebedor.listFromJson(person.coRecebedoresJson))
+            } catch (_: Throwable) {}
+        }
         list
     }
 
@@ -416,21 +700,7 @@ private fun PersonCardItem(
                                             fontWeight = FontWeight.SemiBold,
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
-                                        if (index == 0 && allRecebedores.size > 1) {
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Surface(
-                                                shape = RoundedCornerShape(4.dp),
-                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                                            ) {
-                                                Text(
-                                                    text = "Principal",
-                                                    fontSize = 9.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                )
-                                            }
-                                        }
+
                                     }
 
                                     // Indicador de assinatura
@@ -504,6 +774,34 @@ private fun PersonCardItem(
                                                     Spacer(modifier = Modifier.width(3.dp))
                                                     Text("Copiar Doc", fontSize = 10.sp)
                                                 }
+                                            }
+                                        }
+
+                                        // Botão de remover este recebedor específico
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                                            modifier = Modifier.clickable {
+                                                onDeleteReceiver(index, rec)
+                                            }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = "Remover recebedor",
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(11.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                Text(
+                                                    text = "Remover",
+                                                    fontSize = 10.sp,
+                                                    color = MaterialTheme.colorScheme.error,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
                                             }
                                         }
                                     }

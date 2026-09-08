@@ -43,6 +43,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import com.example.ui.components.VoiceInputIconButton
+import com.example.util.SpeechHelper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -233,6 +235,15 @@ fun AutomationLabScreen(
                         onValueChange = { labReceiverName = it },
                         label = { Text("Nome do recebedor") },
                         placeholder = { Text("Ex: Carlos Mendes") },
+                        trailingIcon = {
+                            VoiceInputIconButton(
+                                hintPrompt = "Fale o nome...",
+                                onResult = { spoken ->
+                                    val clean = SpeechHelper.processSpokenName(spoken)
+                                    if (clean.isNotBlank()) labReceiverName = clean
+                                }
+                            )
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .semantics { contentDescription = "nome recebedor destinatario" }
@@ -248,6 +259,15 @@ fun AutomationLabScreen(
                         onValueChange = { labDocument = it },
                         label = { Text("CPF / Documento") },
                         placeholder = { Text("Ex: 987.654.321-99") },
+                        trailingIcon = {
+                            VoiceInputIconButton(
+                                hintPrompt = "Fale os números do documento...",
+                                onResult = { spoken ->
+                                    val clean = SpeechHelper.processSpokenDocument(spoken)
+                                    if (clean.isNotBlank()) labDocument = clean
+                                }
+                            )
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .semantics { contentDescription = "documento cpf rg recebedor" }

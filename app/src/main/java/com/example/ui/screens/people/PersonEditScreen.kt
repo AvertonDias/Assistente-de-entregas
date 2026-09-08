@@ -79,8 +79,10 @@ import com.example.data.model.Recebedor
 import com.example.data.model.SignatureData
 import com.example.ui.components.DialogBlurEffect
 import com.example.ui.components.SignatureCanvas
+import com.example.ui.components.VoiceInputIconButton
 import com.example.util.AddressNormalizer
 import com.example.util.FeedbackHelper
+import com.example.util.SpeechHelper
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -191,6 +193,7 @@ fun PersonEditScreen(
     // Dialog control for adding/editing a specific receiver
     var editingRecebedor by remember { mutableStateOf<Recebedor?>(null) }
     var isNewRecebedor by remember { mutableStateOf(false) }
+    var recebedorToDelete by remember { mutableStateOf<Pair<Int, Recebedor>?>(null) }
 
     // Signature Fullscreen Modal state
     var isSignatureModalOpen by remember { mutableStateOf(false) }
@@ -216,21 +219,25 @@ fun PersonEditScreen(
         if (personId > 0) {
             val existing = viewModel.getPersonById(personId)
             if (existing != null) {
-                val parsed = AddressNormalizer.parseAddressComponents(
-                    existing.endereco,
-                    existing.numero,
-                    existing.complemento,
-                    existing.bairro
-                )
-                address = parsed.street
-                number = parsed.number
-                complement = parsed.complement
-                neighborhood = parsed.neighborhood
+                var cleanStreet = existing.endereco
+                var cleanComp = existing.complemento
 
-                initialAddressLoaded = parsed.street
-                initialNumberLoaded = parsed.number
-                initialComplementLoaded = parsed.complement
-                initialNeighborhoodLoaded = parsed.neighborhood
+                if (cleanComp.contains("ABALHADORES", ignoreCase = true)) {
+                    cleanComp = cleanComp.replace(Regex("""(?i)\b(?:torre\s+)?abalhadores\b"""), "").trim()
+                    if (cleanStreet.trim().equals("Rua dos", ignoreCase = true) || cleanStreet.trim().equals("Trabalhadores", ignoreCase = true)) {
+                        cleanStreet = "Rua dos Trabalhadores"
+                    }
+                }
+
+                address = cleanStreet
+                number = existing.numero
+                complement = cleanComp
+                neighborhood = existing.bairro
+
+                initialAddressLoaded = cleanStreet
+                initialNumberLoaded = existing.numero
+                initialComplementLoaded = cleanComp
+                initialNeighborhoodLoaded = existing.bairro
 
                 val mainReceiver = Recebedor(
                     id = "main",
@@ -285,7 +292,7 @@ fun PersonEditScreen(
             )
         }
     ) { innerPadding ->
-        val isAnyModalOrDialogOpen = showDiscardScreenConfirmDialog || editingRecebedor != null || isSignatureModalOpen
+        val isAnyModalOrDialogOpen = showDiscardScreenConfirmDialog || editingRecebedor != null || isSignatureModalOpen || recebedorToDelete != null
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -336,12 +343,12 @@ fun PersonEditScreen(
                         OutlinedTextField(
                             value = address,
                             onValueChange = { newVal ->
-                                // Se o usuário colar ou digitar um endereço com número/complemento embutido
-                                if (newVal.contains(",") || newVal.contains("-") || newVal.contains(";") || newVal.any { it.isDigit() }) {
+                                // Se for colagem de texto longo com endereço completo em um formulário com número ainda vazio
+                                if (newVal.length - address.length > 5 && (newVal.contains(",") || newVal.contains("-")) && number.isBlank()) {
                                     val parsed = AddressNormalizer.parseAddressComponents(newVal)
-                                    if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank())) {
+                                    if (parsed.street.isNotBlank()) {
                                         address = parsed.street
-                                        if (parsed.number.isNotBlank() && number.isBlank()) number = parsed.number
+                                        if (parsed.number.isNotBlank()) number = parsed.number
                                         if (parsed.complement.isNotBlank() && complement.isBlank()) complement = parsed.complement
                                         if (parsed.neighborhood.isNotBlank() && neighborhood.isBlank()) neighborhood = parsed.neighborhood
                                     } else {
@@ -356,6 +363,26 @@ fun PersonEditScreen(
                             placeholder = { Text("Ex: Rua das Flores") },
                             isError = addressError,
                             supportingText = { if (addressError) Text("O logradouro é obrigatório") },
+                            trailingIcon = {
+                                VoiceInputIconButton(
+                                    hintPrompt = "Fale o nome da rua...",
+                                    onResult = { spoken ->
+                                        val parsed = AddressNormalizer.parseAddressComponents(spoken)
+                                        if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank() || parsed.neighborhood.isNotBlank())) {
+                                            address = parsed.street
+                                            if (parsed.number.isNotBlank()) number = parsed.number
+                                            if (parsed.complement.isNotBlank() && complement.isBlank()) complement = parsed.complement
+                                            if (parsed.neighborhood.isNotBlank() && neighborhood.isBlank()) neighborhood = parsed.neighborhood
+                                        } else {
+                                            val streetOnly = SpeechHelper.processSpokenStreet(spoken)
+                                            if (streetOnly.isNotBlank()) {
+                                                address = streetOnly
+                                            }
+                                        }
+                                        addressError = address.isBlank()
+                                    }
+                                )
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("person_address_input"),
@@ -372,8 +399,19 @@ fun PersonEditScreen(
                                 onValueChange = { number = it },
                                 label = { Text("Número") },
                                 placeholder = { Text("Ex: 100") },
+                                trailingIcon = {
+                                    VoiceInputIconButton(
+                                        hintPrompt = "Fale o número...",
+                                        onResult = { spoken ->
+                                            val num = SpeechHelper.processSpokenNumber(spoken)
+                                            if (num.isNotBlank()) {
+                                                number = num
+                                            }
+                                        }
+                                    )
+                                },
                                 modifier = Modifier
-                                    .weight(1f)
+                                    .weight(1.1f)
                                     .testTag("person_number_input"),
                                 singleLine = true
                             )
@@ -383,8 +421,19 @@ fun PersonEditScreen(
                                 onValueChange = { complement = it },
                                 label = { Text("Complemento / Unidade") },
                                 placeholder = { Text("Ex: Bloco B Apto 24") },
+                                trailingIcon = {
+                                    VoiceInputIconButton(
+                                        hintPrompt = "Fale o complemento...",
+                                        onResult = { spoken ->
+                                            val comp = SpeechHelper.processSpokenComplement(spoken)
+                                            if (comp.isNotBlank()) {
+                                                complement = comp
+                                            }
+                                        }
+                                    )
+                                },
                                 modifier = Modifier
-                                    .weight(1.8f)
+                                    .weight(1.7f)
                                     .testTag("person_complement_input"),
                                 singleLine = true
                             )
@@ -434,6 +483,17 @@ fun PersonEditScreen(
                             onValueChange = { neighborhood = it },
                             label = { Text("Bairro (Opcional)") },
                             placeholder = { Text("Ex: Jardim das Rosas") },
+                            trailingIcon = {
+                                VoiceInputIconButton(
+                                    hintPrompt = "Fale o bairro...",
+                                    onResult = { spoken ->
+                                        val br = SpeechHelper.processSpokenNeighborhood(spoken)
+                                        if (br.isNotBlank()) {
+                                            neighborhood = br
+                                        }
+                                    }
+                                )
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("person_neighborhood_input"),
@@ -624,9 +684,9 @@ fun PersonEditScreen(
                                             onClick = {
                                                 // Permitir exclusão se não for o último recebedor
                                                 if (recebedoresList.size > 1) {
-                                                    recebedoresList = recebedoresList.filter { it.id != rec.id }
+                                                    recebedorToDelete = Pair(index, rec)
                                                 } else {
-                                                    Toast.makeText(context, "É necessário ter pelo menos um recebedor!", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, "É necessário manter pelo menos um recebedor!", Toast.LENGTH_SHORT).show()
                                                 }
                                             },
                                             enabled = recebedoresList.size > 1,
@@ -698,14 +758,23 @@ fun PersonEditScreen(
                             emptyList()
                         }
 
+                        val parsedAddr = if (number.isBlank()) {
+                            AddressNormalizer.parseAddressComponents(address, number, complement, neighborhood)
+                        } else null
+
+                        val finalStreet = if (parsedAddr != null && parsedAddr.street.isNotBlank()) parsedAddr.street else address.trim()
+                        val finalNum = if (parsedAddr != null && parsedAddr.number.isNotBlank()) parsedAddr.number else number.trim()
+                        val finalComp = if (parsedAddr != null && parsedAddr.complement.isNotBlank() && complement.isBlank()) parsedAddr.complement else complement.trim()
+                        val finalBairro = if (parsedAddr != null && parsedAddr.neighborhood.isNotBlank() && neighborhood.isBlank()) parsedAddr.neighborhood else neighborhood.trim()
+
                         val person = Person(
                             id = personId,
                             nome = primaryRecebedor.nome,
                             documento = primaryRecebedor.documento.trim(),
-                            endereco = address.trim(),
-                            numero = number.trim(),
-                            complemento = complement.trim(),
-                            bairro = neighborhood.trim(),
+                            endereco = finalStreet,
+                            numero = finalNum,
+                            complemento = finalComp,
+                            bairro = finalBairro,
                             cidade = "",
                             uf = "",
                             observacao = "",
@@ -732,6 +801,75 @@ fun PersonEditScreen(
                 }
             }
         }
+    }
+
+    // Diálogo de confirmação para remoção de recebedor dentro do endereço
+    if (recebedorToDelete != null) {
+        val (targetIndex, targetRec) = recebedorToDelete!!
+        AlertDialog(
+            onDismissRequest = { recebedorToDelete = null },
+            title = {
+                Text(
+                    text = "Remover Recebedor",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Deseja realmente remover este recebedor do endereço?",
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = "👤 ${targetRec.nome.ifBlank { "Sem nome" }}",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (targetRec.documento.isNotBlank()) {
+                                Text(
+                                    text = "Doc: ${targetRec.documento}",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "✓ O endereço e os outros ${recebedoresList.size - 1} recebedor(es) serão mantidos normalmente.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        recebedoresList = recebedoresList.filterIndexed { i, _ -> i != targetIndex }
+                        recebedorToDelete = null
+                        Toast.makeText(context, "Recebedor removido.", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("REMOVER", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { recebedorToDelete = null }) {
+                    Text("CANCELAR")
+                }
+            }
+        )
     }
 }
 
@@ -776,7 +914,7 @@ fun PersonEditScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFFF8FAFC))
+                .background(Color(0xFF0F172A))
         ) {
             SignatureCanvas(
                 modifier = Modifier.fillMaxSize(),

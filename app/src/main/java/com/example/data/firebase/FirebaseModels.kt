@@ -14,6 +14,7 @@ data class FirebasePerson(
     val uf: String = "MG",
     val observacao: String = "",
     val assinatura: String = "",
+    val coRecebedoresJson: String = "",
     val dataCriacao: Long = System.currentTimeMillis(),
     val dataAtualizacao: Long = System.currentTimeMillis()
 )
@@ -38,7 +39,12 @@ data class FirebaseDelivery(
 
 sealed class SyncState {
     object Idle : SyncState()
-    object Syncing : SyncState()
+    data class Syncing(
+        val progress: Float = -1f,
+        val stepMessage: String = "Sincronizando com a nuvem...",
+        val processedCount: Int = 0,
+        val totalCount: Int = 0
+    ) : SyncState()
     data class Success(val message: String) : SyncState()
     data class Error(val message: String) : SyncState()
 }

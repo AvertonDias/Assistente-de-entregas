@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocalShipping
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.People
@@ -195,6 +196,9 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                     Toast.makeText(this@FloatingBubbleService, msg, Toast.LENGTH_SHORT).show()
                     if (success) {
                         triggerSuccessFeedback()
+                        mainHandler.postDelayed({
+                            AccessibilityAutomationEngine.resetAndClearAfterSignature(5000L)
+                        }, 500L)
                     }
                 }
             }, 200L)
@@ -444,19 +448,32 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         var isSignatureFullScreen by remember { mutableStateOf(false) }
 
         // Form Fields for Editing / Registering in the Assistant
+        var editModalTab by remember { mutableStateOf("RESIDENT") } // "ADDRESS" or "RESIDENT"
         var editingPersonId by remember { mutableStateOf<Long?>(null) }
         var editingRecebedorId by remember { mutableStateOf<String?>(null) }
-        var editedAddress by remember { mutableStateOf("") }
+        var editedStreet by remember { mutableStateOf("") }
+        var editedNumber by remember { mutableStateOf("") }
+        var editedComplement by remember { mutableStateOf("") }
+        var editedNeighborhood by remember { mutableStateOf("") }
         var recipientName by remember { mutableStateOf("") }
         var recipientDocument by remember { mutableStateOf("") }
         var collectedSignatureData by remember { mutableStateOf<SignatureData?>(null) }
+        var isSavingRecipient by remember { mutableStateOf(false) }
 
         var isListeningName by remember { mutableStateOf(false) }
         var isListeningDoc by remember { mutableStateOf(false) }
+        var isListeningStreet by remember { mutableStateOf(false) }
+        var isListeningNumber by remember { mutableStateOf(false) }
+        var isListeningComplement by remember { mutableStateOf(false) }
+        var isListeningNeighborhood by remember { mutableStateOf(false) }
+        var isListeningSearch by remember { mutableStateOf(false) }
         val serviceContext = this@FloatingBubbleService
 
         // Rastreamento dos valores iniciais para trava de segurança contra fechamento acidental
-        var initialEditedAddress by remember { mutableStateOf("") }
+        var initialEditedStreet by remember { mutableStateOf("") }
+        var initialEditedNumber by remember { mutableStateOf("") }
+        var initialEditedComplement by remember { mutableStateOf("") }
+        var initialEditedNeighborhood by remember { mutableStateOf("") }
         var initialRecipientName by remember { mutableStateOf("") }
         var initialRecipientDocument by remember { mutableStateOf("") }
         var initialCollectedSigJson by remember { mutableStateOf("") }
@@ -465,7 +482,10 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
         val hasUnsavedEditChanges by remember {
             androidx.compose.runtime.derivedStateOf {
-                editedAddress.trim() != initialEditedAddress.trim() ||
+                editedStreet.trim() != initialEditedStreet.trim() ||
+                        editedNumber.trim() != initialEditedNumber.trim() ||
+                        editedComplement.trim() != initialEditedComplement.trim() ||
+                        editedNeighborhood.trim() != initialEditedNeighborhood.trim() ||
                         recipientName.trim() != initialRecipientName.trim() ||
                         recipientDocument.trim() != initialRecipientDocument.trim() ||
                         (collectedSignatureData?.toJson() ?: "") != initialCollectedSigJson
@@ -492,45 +512,93 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             // Selected recebedor is maintained by AccessibilityAutomationEngine
         }
 
-        // Helper to open Edit/Complete modal for current recipient
-        val openEditForCurrent: (focusDoc: Boolean) -> Unit = { _ ->
+        // Helper to open Edit/Complete modal for current recipient or address
+        val openEditForCurrent: (tab: String, focusDoc: Boolean) -> Unit = { tab, _ ->
             val matchedP = automationState.matchedPerson
-            val initialAddr = matchedP?.endereco ?: AddressNormalizer.extractStreetAndNumber(address)
+            val st: String
+            val num: String
+            val comp: String
+            val br: String
+
+            if (matchedP != null) {
+                st = matchedP.endereco
+                num = matchedP.numero
+                comp = matchedP.complemento
+                br = matchedP.bairro
+            } else {
+                val detected = automationState.detectedAddressText.trim()
+                val parsed = AddressNormalizer.parseAddressComponents(detected)
+                st = parsed.street
+                num = parsed.number
+                comp = parsed.complement
+                br = parsed.neighborhood
+            }
             val initialNm = person?.nome ?: matchedP?.nome ?: ""
             val initialDoc = person?.documento ?: matchedP?.documento ?: ""
             val sigStr = person?.assinatura ?: matchedP?.assinatura ?: ""
 
             editingPersonId = matchedP?.id
             editingRecebedorId = person?.id
-            editedAddress = initialAddr
+            editedStreet = st
+            editedNumber = num
+            editedComplement = comp
+            editedNeighborhood = br
             recipientName = initialNm
             recipientDocument = initialDoc
             collectedSignatureData = if (sigStr.isNotBlank()) SignatureData.fromJson(sigStr) else null
 
-            initialEditedAddress = initialAddr
+            initialEditedStreet = st
+            initialEditedNumber = num
+            initialEditedComplement = comp
+            initialEditedNeighborhood = br
             initialRecipientName = initialNm
             initialRecipientDocument = initialDoc
             initialCollectedSigJson = sigStr
 
+            editModalTab = tab
             isEditModalOpen = true
             updateWindowLayoutMode(OverlayMode.MODAL)
         }
 
         // Helper to open Register modal for an additional resident at the current address
         val openRegisterNewResidentForAddress: (targetPerson: Person?) -> Unit = { targetPerson ->
-            val initialAddr = targetPerson?.endereco ?: AddressNormalizer.extractStreetAndNumber(address)
+            val st: String
+            val num: String
+            val comp: String
+            val br: String
+
+            if (targetPerson != null) {
+                st = targetPerson.endereco
+                num = targetPerson.numero
+                comp = targetPerson.complemento
+                br = targetPerson.bairro
+            } else {
+                val detected = automationState.detectedAddressText.trim()
+                val parsed = AddressNormalizer.parseAddressComponents(detected)
+                st = parsed.street
+                num = parsed.number
+                comp = parsed.complement
+                br = parsed.neighborhood
+            }
             editingPersonId = targetPerson?.id
             editingRecebedorId = "new_co"
-            editedAddress = initialAddr
+            editedStreet = st
+            editedNumber = num
+            editedComplement = comp
+            editedNeighborhood = br
             recipientName = ""
             recipientDocument = ""
             collectedSignatureData = null
 
-            initialEditedAddress = initialAddr
+            initialEditedStreet = st
+            initialEditedNumber = num
+            initialEditedComplement = comp
+            initialEditedNeighborhood = br
             initialRecipientName = ""
             initialRecipientDocument = ""
             initialCollectedSigJson = ""
 
+            editModalTab = "RESIDENT"
             isSearchModalOpen = false
             isEditModalOpen = true
             updateWindowLayoutMode(OverlayMode.MODAL)
@@ -570,7 +638,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color(0xFFF8FAFC))
+                        .background(Color(0xFF0F172A))
                 ) {
                     SignatureCanvas(
                         modifier = Modifier.fillMaxSize(),
@@ -596,7 +664,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
                 Card(
                     modifier = Modifier
-                        .width(340.dp)
+                        .width(356.dp)
                         .shadow(16.dp, RoundedCornerShape(16.dp)),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -649,9 +717,41 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.Gray)
                             },
                             trailingIcon = {
-                                if (searchModalQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchModalQuery = "" }, modifier = Modifier.size(20.dp)) {
-                                        Icon(Icons.Default.Close, contentDescription = "Limpar", tint = Color.Gray)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (searchModalQuery.isNotEmpty()) {
+                                        IconButton(onClick = { searchModalQuery = "" }, modifier = Modifier.size(24.dp)) {
+                                            Icon(Icons.Default.Close, contentDescription = "Limpar", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            if (!isListeningSearch) {
+                                                isListeningSearch = true
+                                                com.example.util.SpeechHelper.startListening(
+                                                    context = serviceContext,
+                                                    onReady = { Toast.makeText(serviceContext, "Fale o nome, documento ou rua...", Toast.LENGTH_SHORT).show() },
+                                                    onResult = { result ->
+                                                        isListeningSearch = false
+                                                        val clean = com.example.util.SpeechHelper.processSpokenSearch(result)
+                                                        if (clean.isNotBlank()) {
+                                                            searchModalQuery = clean
+                                                        }
+                                                    },
+                                                    onError = { err ->
+                                                        isListeningSearch = false
+                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                    }
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Mic,
+                                            contentDescription = "Falar Busca",
+                                            tint = if (isListeningSearch) MaterialTheme.colorScheme.primary else Color.Gray,
+                                            modifier = Modifier.size(18.dp)
+                                        )
                                     }
                                 }
                             },
@@ -676,18 +776,26 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 border = BorderStroke(1.dp, Color(0xFF81C784)),
                                 modifier = Modifier.clickable {
                                     val initialAddr = searchModalQuery.trim()
+                                    val parsed = AddressNormalizer.parseAddressComponents(initialAddr)
                                     editingPersonId = null
                                     editingRecebedorId = null
-                                    editedAddress = initialAddr
+                                    editedStreet = parsed.street
+                                    editedNumber = parsed.number
+                                    editedComplement = parsed.complement
+                                    editedNeighborhood = parsed.neighborhood
                                     recipientName = ""
                                     recipientDocument = ""
                                     collectedSignatureData = null
 
-                                    initialEditedAddress = initialAddr
+                                    initialEditedStreet = parsed.street
+                                    initialEditedNumber = parsed.number
+                                    initialEditedComplement = parsed.complement
+                                    initialEditedNeighborhood = parsed.neighborhood
                                     initialRecipientName = ""
                                     initialRecipientDocument = ""
                                     initialCollectedSigJson = ""
 
+                                    editModalTab = if (parsed.street.isNotBlank()) "RESIDENT" else "ADDRESS"
                                     isSearchModalOpen = false
                                     isEditModalOpen = true
                                     updateWindowLayoutMode(OverlayMode.MODAL)
@@ -700,7 +808,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     Icon(Icons.Default.Add, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(13.dp))
                                     Spacer(modifier = Modifier.width(3.dp))
                                     Text(
-                                        text = if (searchModalQuery.isNotBlank()) "+ Cadastrar neste Endereço" else "+ Novo Destinatário",
+                                        text = if (searchModalQuery.isNotBlank()) "Cadastrar neste Endereço" else "Novo Destinatário",
                                         fontSize = 10.5.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFF2E7D32)
@@ -735,18 +843,26 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                             Button(
                                                 onClick = {
                                                     val initialAddr = searchModalQuery.trim()
+                                                    val parsed = AddressNormalizer.parseAddressComponents(initialAddr)
                                                     editingPersonId = null
                                                     editingRecebedorId = null
-                                                    editedAddress = initialAddr
+                                                    editedStreet = parsed.street
+                                                    editedNumber = parsed.number
+                                                    editedComplement = parsed.complement
+                                                    editedNeighborhood = parsed.neighborhood
                                                     recipientName = ""
                                                     recipientDocument = ""
                                                     collectedSignatureData = null
 
-                                                    initialEditedAddress = initialAddr
+                                                    initialEditedStreet = parsed.street
+                                                    initialEditedNumber = parsed.number
+                                                    initialEditedComplement = parsed.complement
+                                                    initialEditedNeighborhood = parsed.neighborhood
                                                     initialRecipientName = ""
                                                     initialRecipientDocument = ""
                                                     initialCollectedSigJson = ""
 
+                                                    editModalTab = if (parsed.street.isNotBlank()) "RESIDENT" else "ADDRESS"
                                                     isSearchModalOpen = false
                                                     isEditModalOpen = true
                                                     updateWindowLayoutMode(OverlayMode.MODAL)
@@ -762,7 +878,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     }
                                 }
                             } else {
-                                items(searchResults, key = { it.id }) { itemPerson ->
+                                items(searchResults, key = { "${it.id}_${it.endereco}_${it.nome}" }) { itemPerson ->
                                     val hasDoc = itemPerson.documento.isNotBlank()
                                     val hasSig = itemPerson.assinatura.isNotBlank()
                                     val isIncomplete = !hasDoc || !hasSig
@@ -996,7 +1112,9 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     onClick = {
                                                         AccessibilityAutomationEngine.setMatchedPersonDirect(itemPerson)
                                                         if (allRecs.isNotEmpty()) {
-                                                            AccessibilityAutomationEngine.selectRecebedor(allRecs.first())
+                                                            val selRec = allRecs.first()
+                                                            AccessibilityAutomationEngine.selectRecebedor(selRec)
+                                                            AccessibilityAutomationEngine.prioritizeRecebedor(selRec)
                                                         }
                                                         isSearchModalOpen = false
                                                         updateWindowLayoutMode(OverlayMode.PANEL)
@@ -1006,14 +1124,20 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                             Toast.LENGTH_SHORT
                                                         ).show()
                                                     },
-                                                    modifier = Modifier.weight(1f).height(32.dp),
-                                                    contentPadding = PaddingValues(horizontal = 4.dp),
+                                                    modifier = Modifier.weight(1.05f).height(32.dp),
+                                                    contentPadding = PaddingValues(horizontal = 2.dp),
                                                     shape = RoundedCornerShape(6.dp),
                                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
                                                 ) {
-                                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(13.dp))
+                                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(12.dp))
                                                     Spacer(modifier = Modifier.width(2.dp))
-                                                    Text("Selecionar", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                    Text(
+                                                        text = "Selecionar",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        softWrap = false
+                                                    )
                                                 }
 
                                                 // Botão Preencher
@@ -1021,7 +1145,9 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     onClick = {
                                                         AccessibilityAutomationEngine.setMatchedPersonDirect(itemPerson)
                                                         if (allRecs.isNotEmpty()) {
-                                                            AccessibilityAutomationEngine.selectRecebedor(allRecs.first())
+                                                            val selRec = allRecs.first()
+                                                            AccessibilityAutomationEngine.selectRecebedor(selRec)
+                                                            AccessibilityAutomationEngine.prioritizeRecebedor(selRec)
                                                         }
                                                         val res = AccessibilityAutomationEngine.fillFields(
                                                             itemPerson.nome,
@@ -1034,76 +1160,92 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                         isSearchModalOpen = false
                                                         updateWindowLayoutMode(OverlayMode.PANEL)
                                                     },
-                                                    modifier = Modifier.weight(1.1f).height(32.dp),
-                                                    contentPadding = PaddingValues(horizontal = 4.dp),
+                                                    modifier = Modifier.weight(1.05f).height(32.dp),
+                                                    contentPadding = PaddingValues(horizontal = 2.dp),
                                                     shape = RoundedCornerShape(6.dp),
                                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2))
                                                 ) {
-                                                    Icon(Icons.Default.FlashOn, contentDescription = null, modifier = Modifier.size(13.dp))
+                                                    Icon(Icons.Default.FlashOn, contentDescription = null, modifier = Modifier.size(12.dp))
                                                     Spacer(modifier = Modifier.width(2.dp))
-                                                    Text("Preencher", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                    Text(
+                                                        text = "Preencher",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        softWrap = false
+                                                    )
                                                 }
 
                                                  // Botão Editar / Completar Cadastro Direto no Assistente
-                                                OutlinedButton(
+                                                 OutlinedButton(
                                                     onClick = {
-                                                        val initialAddr = itemPerson.endereco
                                                         val initialNm = itemPerson.nome
                                                         val initialDoc = itemPerson.documento
                                                         val sigStr = itemPerson.assinatura
 
                                                         editingPersonId = itemPerson.id
                                                         editingRecebedorId = "main"
-                                                        editedAddress = initialAddr
+                                                        editedStreet = itemPerson.endereco
+                                                        editedNumber = itemPerson.numero
+                                                        editedComplement = itemPerson.complemento
+                                                        editedNeighborhood = itemPerson.bairro
                                                         recipientName = initialNm
                                                         recipientDocument = initialDoc
                                                         collectedSignatureData = if (sigStr.isNotBlank()) {
                                                             SignatureData.fromJson(sigStr)
                                                         } else null
 
-                                                        initialEditedAddress = initialAddr
+                                                        initialEditedStreet = itemPerson.endereco
+                                                        initialEditedNumber = itemPerson.numero
+                                                        initialEditedComplement = itemPerson.complemento
+                                                        initialEditedNeighborhood = itemPerson.bairro
                                                         initialRecipientName = initialNm
                                                         initialRecipientDocument = initialDoc
                                                         initialCollectedSigJson = sigStr
 
+                                                        editModalTab = "RESIDENT"
                                                         isSearchModalOpen = false
                                                         isEditModalOpen = true
                                                         updateWindowLayoutMode(OverlayMode.MODAL)
                                                     },
-                                                    modifier = Modifier.weight(1f).height(32.dp),
-                                                    contentPadding = PaddingValues(horizontal = 4.dp),
+                                                    modifier = Modifier.weight(1.05f).height(32.dp),
+                                                    contentPadding = PaddingValues(horizontal = 2.dp),
                                                     shape = RoundedCornerShape(6.dp),
                                                     colors = ButtonDefaults.outlinedButtonColors(
                                                         contentColor = if (isIncomplete) Color(0xFFE65100) else Color(0xFF0D47A1)
                                                     )
                                                 ) {
-                                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(13.dp))
+                                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(12.dp))
                                                     Spacer(modifier = Modifier.width(2.dp))
                                                     Text(
                                                         text = if (isIncomplete) "Completar" else "Editar",
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.Bold
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        softWrap = false
                                                     )
                                                 }
 
-                                                // Botão + Outro Morador neste Endereço
+                                                // Botão Morador neste Endereço
                                                 OutlinedButton(
                                                     onClick = {
                                                         openRegisterNewResidentForAddress(itemPerson)
                                                     },
-                                                    modifier = Modifier.weight(1.1f).height(32.dp),
-                                                    contentPadding = PaddingValues(horizontal = 4.dp),
+                                                    modifier = Modifier.weight(0.95f).height(32.dp),
+                                                    contentPadding = PaddingValues(horizontal = 2.dp),
                                                     shape = RoundedCornerShape(6.dp),
                                                     colors = ButtonDefaults.outlinedButtonColors(
                                                         contentColor = Color(0xFF6A1B9A)
                                                     )
                                                 ) {
-                                                    Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(13.dp))
+                                                    Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(12.dp))
                                                     Spacer(modifier = Modifier.width(2.dp))
                                                     Text(
-                                                        text = "+ Morador",
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.Bold
+                                                        text = "Morador",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        softWrap = false
                                                     )
                                                 }
                                             }
@@ -1148,17 +1290,21 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    imageVector = if (isEditingExisting) Icons.Default.Edit else Icons.Default.PersonAdd,
+                                    imageVector = if (editModalTab == "ADDRESS") Icons.Default.LocationOn else if (isEditingExisting) Icons.Default.Edit else Icons.Default.PersonAdd,
                                     contentDescription = null,
-                                    tint = if (isEditingExisting) Color(0xFF0288D1) else if (isAddingNewResident) Color(0xFF6A1B9A) else Color(0xFF0D47A1),
+                                    tint = if (editModalTab == "ADDRESS") Color(0xFFE65100) else if (isEditingExisting) Color(0xFF0288D1) else if (isAddingNewResident) Color(0xFF6A1B9A) else Color(0xFF0D47A1),
                                     modifier = Modifier.size(22.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (isEditingExisting) "Editar / Completar Dados" else if (isAddingNewResident) "Adicionar Morador no Endereço" else "Cadastrar Destinatário",
+                                    text = if (editModalTab == "ADDRESS") {
+                                        "Editar Endereço Completo"
+                                    } else {
+                                        if (isEditingExisting) "Editar Dados do Morador" else if (isAddingNewResident) "Adicionar Morador no Endereço" else "Cadastrar Destinatário"
+                                    },
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 13.5.sp,
-                                    color = if (isEditingExisting) Color(0xFF0288D1) else if (isAddingNewResident) Color(0xFF6A1B9A) else Color(0xFF0D47A1)
+                                    color = if (editModalTab == "ADDRESS") Color(0xFFE65100) else if (isEditingExisting) Color(0xFF0288D1) else if (isAddingNewResident) Color(0xFF6A1B9A) else Color(0xFF0D47A1)
                                 )
                             }
                             IconButton(
@@ -1171,242 +1317,653 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
                         HorizontalDivider(color = Color(0xFFE0E0E0))
 
-                        // Alerta se faltar algo no formulário
-                        if (isEditingExisting && (isMissingDocInForm || isMissingSigInForm)) {
+                        // Seletor de Abas Separadas: [📍 Endereço] e [👤 Morador]
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFFF1F5F9))
+                                .padding(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            // Aba 1: Endereço
+                            val isAddressTab = editModalTab == "ADDRESS"
                             Surface(
+                                onClick = { editModalTab = "ADDRESS" },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp),
                                 shape = RoundedCornerShape(8.dp),
-                                color = Color(0xFFFFF3E0),
-                                border = BorderStroke(1.dp, Color(0xFFFFB74D)),
-                                modifier = Modifier.fillMaxWidth()
+                                color = if (isAddressTab) Color.White else Color.Transparent,
+                                shadowElevation = if (isAddressTab) 2.dp else 0.dp,
+                                border = if (isAddressTab) BorderStroke(1.dp, Color(0xFFCBD5E1)) else null
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(8.dp),
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFE65100), modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.LocationOn,
+                                        contentDescription = null,
+                                        tint = if (isAddressTab) Color(0xFFE65100) else Color(0xFF64748B),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = buildString {
-                                            append("Faltando: ")
-                                            if (isMissingDocInForm && isMissingSigInForm) append("Documento e Assinatura")
-                                            else if (isMissingDocInForm) append("Documento (CPF/RG)")
-                                            else append("Assinatura")
+                                        text = "Endereço",
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isAddressTab) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isAddressTab) Color(0xFF0F172A) else Color(0xFF64748B)
+                                    )
+                                }
+                            }
+
+                            // Aba 2: Morador
+                            val isResidentTab = editModalTab == "RESIDENT"
+                            Surface(
+                                onClick = { editModalTab = "RESIDENT" },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isResidentTab) Color.White else Color.Transparent,
+                                shadowElevation = if (isResidentTab) 2.dp else 0.dp,
+                                border = if (isResidentTab) BorderStroke(1.dp, Color(0xFFCBD5E1)) else null
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = null,
+                                        tint = if (isResidentTab) Color(0xFF0288D1) else Color(0xFF64748B),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Morador",
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isResidentTab) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isResidentTab) Color(0xFF0F172A) else Color(0xFF64748B)
+                                    )
+                                }
+                            }
+                        }
+
+                        // CONTEÚDO DA ABA SELECIONADA
+                        if (editModalTab == "ADDRESS") {
+                            // --- ABA 1: EDITAR ENDEREÇO COMPLETO ---
+                            Text(
+                                text = "Logradouro / Rua / Avenida *:",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF424242)
+                            )
+                            OutlinedTextField(
+                                value = editedStreet,
+                                onValueChange = { input ->
+                                    if (input.contains(",") || input.contains(" - ") || input.contains("\n")) {
+                                        val parsed = AddressNormalizer.parseAddressComponents(input)
+                                        if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank() || parsed.neighborhood.isNotBlank())) {
+                                            editedStreet = parsed.street
+                                            if (parsed.number.isNotBlank()) editedNumber = parsed.number
+                                            if (parsed.complement.isNotBlank()) editedComplement = parsed.complement
+                                            if (parsed.neighborhood.isNotBlank()) editedNeighborhood = parsed.neighborhood
+                                            return@OutlinedTextField
+                                        }
+                                    }
+                                    editedStreet = input
+                                },
+                                placeholder = { Text("Ex: Rua das Flores", fontSize = 12.sp) },
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = {
+                                            if (!isListeningStreet) {
+                                                isListeningStreet = true
+                                                com.example.util.SpeechHelper.startListening(
+                                                    context = serviceContext,
+                                                    onReady = { Toast.makeText(serviceContext, "Fale a rua...", Toast.LENGTH_SHORT).show() },
+                                                    onResult = { result ->
+                                                        isListeningStreet = false
+                                                        val parsed = AddressNormalizer.parseAddressComponents(result)
+                                                        if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank() || parsed.neighborhood.isNotBlank())) {
+                                                            editedStreet = parsed.street
+                                                            if (parsed.number.isNotBlank()) editedNumber = parsed.number
+                                                            if (parsed.complement.isNotBlank()) editedComplement = parsed.complement
+                                                            if (parsed.neighborhood.isNotBlank()) editedNeighborhood = parsed.neighborhood
+                                                        } else {
+                                                            val st = com.example.util.SpeechHelper.processSpokenStreet(result)
+                                                            if (st.isNotBlank()) editedStreet = st
+                                                        }
+                                                    },
+                                                    onError = { err ->
+                                                        isListeningStreet = false
+                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                    }
+                                                )
+                                            }
                                         },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Mic,
+                                            contentDescription = "Falar Rua",
+                                            tint = if (isListeningStreet) MaterialTheme.colorScheme.primary else Color.Gray,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Número:",
                                         fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF424242)
+                                    )
+                                    OutlinedTextField(
+                                        value = editedNumber,
+                                        onValueChange = { editedNumber = it },
+                                        placeholder = { Text("Ex: 123", fontSize = 12.sp) },
+                                        trailingIcon = {
+                                            IconButton(
+                                                onClick = {
+                                                    if (!isListeningNumber) {
+                                                        isListeningNumber = true
+                                                        com.example.util.SpeechHelper.startListening(
+                                                            context = serviceContext,
+                                                            onReady = { Toast.makeText(serviceContext, "Fale o número...", Toast.LENGTH_SHORT).show() },
+                                                            onResult = { result ->
+                                                                isListeningNumber = false
+                                                                val num = com.example.util.SpeechHelper.processSpokenNumber(result)
+                                                                if (num.isNotBlank()) editedNumber = num
+                                                            },
+                                                            onError = { err ->
+                                                                isListeningNumber = false
+                                                                Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Mic,
+                                                    contentDescription = "Falar Número",
+                                                    tint = if (isListeningNumber) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        singleLine = true
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1.3f)) {
+                                    Text(
+                                        text = "Complemento / Unidade:",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF424242)
+                                    )
+                                    OutlinedTextField(
+                                        value = editedComplement,
+                                        onValueChange = { editedComplement = it },
+                                        placeholder = { Text("Ex: Apto 101 Bloco B", fontSize = 12.sp) },
+                                        trailingIcon = {
+                                            IconButton(
+                                                onClick = {
+                                                    if (!isListeningComplement) {
+                                                        isListeningComplement = true
+                                                        com.example.util.SpeechHelper.startListening(
+                                                            context = serviceContext,
+                                                            onReady = { Toast.makeText(serviceContext, "Fale o complemento...", Toast.LENGTH_SHORT).show() },
+                                                            onResult = { result ->
+                                                                isListeningComplement = false
+                                                                val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
+                                                                if (comp.isNotBlank()) editedComplement = comp
+                                                            },
+                                                            onError = { err ->
+                                                                isListeningComplement = false
+                                                                Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Mic,
+                                                    contentDescription = "Falar Complemento",
+                                                    tint = if (isListeningComplement) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+                                }
+                            }
+
+                            // Atalhos rápidos de complemento
+                            Text(
+                                text = "Atalhos rápidos de complemento:",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF616161)
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                listOf("Apto", "Bloco", "Casa", "Torre", "Sala", "Fundos", "Sobrado", "Lote", "Quadra").forEach { chip ->
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color(0xFFF5F5F5),
+                                        border = BorderStroke(0.5.dp, Color(0xFFE0E0E0)),
+                                        modifier = Modifier.clickable {
+                                            editedComplement = if (editedComplement.isBlank()) chip else "$editedComplement $chip"
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "+ $chip",
+                                            fontSize = 9.5.sp,
+                                            color = Color(0xFF424242),
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Text(
+                                text = "Bairro (Opcional):",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF424242)
+                            )
+                            OutlinedTextField(
+                                value = editedNeighborhood,
+                                onValueChange = { editedNeighborhood = it },
+                                placeholder = { Text("Ex: Centro", fontSize = 12.sp) },
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = {
+                                            if (!isListeningNeighborhood) {
+                                                isListeningNeighborhood = true
+                                                com.example.util.SpeechHelper.startListening(
+                                                    context = serviceContext,
+                                                    onReady = { Toast.makeText(serviceContext, "Fale o bairro...", Toast.LENGTH_SHORT).show() },
+                                                    onResult = { result ->
+                                                        isListeningNeighborhood = false
+                                                        val br = com.example.util.SpeechHelper.processSpokenNeighborhood(result)
+                                                        if (br.isNotBlank()) editedNeighborhood = br
+                                                    },
+                                                    onError = { err ->
+                                                        isListeningNeighborhood = false
+                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                    }
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Mic,
+                                            contentDescription = "Falar Bairro",
+                                            tint = if (isListeningNeighborhood) MaterialTheme.colorScheme.primary else Color.Gray,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            // Pré-visualização do endereço formatado
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFFFF8E1),
+                                border = BorderStroke(1.dp, Color(0xFFFFE082)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        text = "PRÉ-VISUALIZAÇÃO DO ENDEREÇO:",
+                                        fontSize = 9.5.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFFE65100)
                                     )
+                                    val fullAddrPreview = buildString {
+                                        append(editedStreet.ifBlank { "Rua não informada" })
+                                        if (editedNumber.isNotBlank()) append(", nº $editedNumber")
+                                        if (editedComplement.isNotBlank()) append(" - $editedComplement")
+                                        if (editedNeighborhood.isNotBlank()) append(" ($editedNeighborhood)")
+                                    }
+                                    Text(
+                                        text = fullAddrPreview,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF212121)
+                                    )
                                 }
                             }
-                        }
 
-                        // Endereço
-                        Text(
-                            text = "Endereço (Rua e Número):",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF424242)
-                        )
-                        OutlinedTextField(
-                            value = editedAddress,
-                            onValueChange = { editedAddress = it },
-                            placeholder = { Text("Ex: Rua das Flores, 123", fontSize = 12.sp) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
-
-                        // Nome do Recebedor
-                        Text(
-                            text = "Nome do Recebedor *:",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF424242)
-                        )
-                        OutlinedTextField(
-                            value = recipientName,
-                            onValueChange = { recipientName = it },
-                            placeholder = { Text("Ex: Maria da Silva", fontSize = 12.sp) },
-                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                            trailingIcon = {
-                                IconButton(
-                                    onClick = {
-                                        if (!isListeningName) {
-                                            isListeningName = true
-                                            com.example.util.SpeechHelper.startListening(
-                                                context = serviceContext,
-                                                onReady = { Toast.makeText(serviceContext, "Fale o nome...", Toast.LENGTH_SHORT).show() },
-                                                onResult = { result ->
-                                                    isListeningName = false
-                                                    val processed = com.example.util.SpeechHelper.processSpokenName(result)
-                                                    if (processed.isNotBlank()) {
-                                                        recipientName = processed
-                                                    }
-                                                },
-                                                onError = { err ->
-                                                    isListeningName = false
-                                                    Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
-                                                }
-                                            )
-                                        }
-                                    }
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Mic,
-                                        contentDescription = "Falar Nome",
-                                        tint = if (isListeningName) MaterialTheme.colorScheme.primary else Color.Gray
-                                    )
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
-
-                        // Documento do Recebedor (numérico)
-                        Text(
-                            text = "Documento do Recebedor (CPF / RG):",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF424242)
-                        )
-                        val isDocValidState = remember(recipientDocument) {
-                            if (recipientDocument.isBlank()) null else com.example.util.SpeechHelper.isValidDocument(recipientDocument)
-                        }
-
-                        OutlinedTextField(
-                            value = recipientDocument,
-                            onValueChange = { input ->
-                                recipientDocument = input.filter { it.isLetterOrDigit() || it == '.' || it == '-' }
-                            },
-                            placeholder = { Text("Ex: 123.456.789-00", fontSize = 12.sp) },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = when (isDocValidState) {
-                                    true -> Color(0xFF2E7D32)
-                                    false -> Color(0xFFD32F2F)
-                                    null -> MaterialTheme.colorScheme.primary
-                                },
-                                unfocusedBorderColor = when (isDocValidState) {
-                                    true -> Color(0xFF4CAF50)
-                                    false -> Color(0xFFE53935)
-                                    null -> MaterialTheme.colorScheme.outline
-                                }
-                            ),
-                            supportingText = {
-                                when (isDocValidState) {
-                                    true -> Text("Documento válido", color = Color(0xFF2E7D32), fontSize = 11.sp)
-                                    false -> Text("Documento inválido", color = Color(0xFFD32F2F), fontSize = 11.sp)
-                                    null -> null
-                                }
-                            },
-                            trailingIcon = {
-                                IconButton(
-                                    onClick = {
-                                        if (!isListeningDoc) {
-                                            isListeningDoc = true
-                                            com.example.util.SpeechHelper.startListening(
-                                                context = serviceContext,
-                                                onReady = { Toast.makeText(serviceContext, "Fale os números do documento...", Toast.LENGTH_SHORT).show() },
-                                                onResult = { result ->
-                                                    isListeningDoc = false
-                                                    val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
-                                                    if (processed.isNotBlank()) {
-                                                        recipientDocument = processed
-                                                    }
-                                                },
-                                                onError = { err ->
-                                                    isListeningDoc = false
-                                                    Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
-                                                }
-                                            )
-                                        }
-                                    }
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Mic,
-                                        contentDescription = "Falar Documento",
-                                        tint = if (isListeningDoc) MaterialTheme.colorScheme.primary else Color.Gray
-                                    )
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
-
-                        // Assinatura
-                        Text(
-                            text = "Assinatura do Recebedor:",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF424242)
-                        )
-
-                        if (collectedSignatureData != null) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = Color(0xFFE8F5E9),
-                                border = BorderStroke(1.dp, Color(0xFF81C784)),
-                                modifier = Modifier.fillMaxWidth()
+                            // Botão para avançar para a aba do morador
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(8.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Assinatura gravada", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
-                                    }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        OutlinedButton(
-                                            onClick = {
-                                                isSignatureFullScreen = true
-                                                updateWindowLayoutMode(OverlayMode.FULLSCREEN_SIGNATURE)
-                                            },
-                                            modifier = Modifier.height(30.dp),
-                                            contentPadding = PaddingValues(horizontal = 6.dp),
-                                            shape = RoundedCornerShape(4.dp)
-                                        ) {
-                                            Text("Refazer", fontSize = 10.sp)
-                                        }
-                                        OutlinedButton(
-                                            onClick = { showBubbleClearSigConfirmDialog = true },
-                                            modifier = Modifier.height(30.dp),
-                                            contentPadding = PaddingValues(horizontal = 6.dp),
-                                            shape = RoundedCornerShape(4.dp)
-                                        ) {
-                                            Text("Limpar", fontSize = 10.sp, color = Color.Red)
-                                        }
-                                    }
+                                TextButton(onClick = { editModalTab = "RESIDENT" }) {
+                                    Text(
+                                        text = "Ir para dados do morador ➔",
+                                        fontSize = 11.5.sp,
+                                        color = Color(0xFF0288D1),
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
                             }
                         } else {
-                            Button(
-                                onClick = {
-                                    isSignatureFullScreen = true
-                                    updateWindowLayoutMode(OverlayMode.FULLSCREEN_SIGNATURE)
-                                },
+                            // --- ABA 2: EDITAR DADOS DO MORADOR ---
+                            // Resumo do endereço vinculado com atalho para editar endereço
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFE3F2FD),
+                                border = BorderStroke(1.dp, Color(0xFF90CAF9)),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(42.dp),
-                                shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2))
+                                    .clickable { editModalTab = "ADDRESS" }
                             ) {
-                                Icon(Icons.Default.Draw, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "✍️ COLETAR ASSINATURA",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.LocationOn,
+                                            contentDescription = null,
+                                            tint = Color(0xFF0D47A1),
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                        val summary = buildString {
+                                            append(editedStreet.ifBlank { "Endereço não definido" })
+                                            if (editedNumber.isNotBlank()) append(", $editedNumber")
+                                            if (editedComplement.isNotBlank()) append(" ($editedComplement)")
+                                        }
+                                        Text(
+                                            text = summary,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFF0D47A1),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Editar Endereço ➔",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF0D47A1)
+                                    )
+                                }
+                            }
+
+                            // Alerta se faltar algo no formulário do morador
+                            if (isEditingExisting && (isMissingDocInForm || isMissingSigInForm)) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFFFFF3E0),
+                                    border = BorderStroke(1.dp, Color(0xFFFFB74D)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFE65100), modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = buildString {
+                                                append("Faltando: ")
+                                                if (isMissingDocInForm && isMissingSigInForm) append("Documento e Assinatura")
+                                                else if (isMissingDocInForm) append("Documento (CPF/RG)")
+                                                else append("Assinatura")
+                                            },
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFE65100)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Nome do Recebedor
+                            Text(
+                                text = "Nome do Recebedor *:",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF424242)
+                            )
+                            OutlinedTextField(
+                                value = recipientName,
+                                onValueChange = { recipientName = it },
+                                placeholder = { Text("Ex: Maria da Silva", fontSize = 12.sp) },
+                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = {
+                                            if (!isListeningName) {
+                                                isListeningName = true
+                                                com.example.util.SpeechHelper.startListening(
+                                                    context = serviceContext,
+                                                    onReady = { Toast.makeText(serviceContext, "Fale o nome...", Toast.LENGTH_SHORT).show() },
+                                                    onResult = { result ->
+                                                        isListeningName = false
+                                                        val processed = com.example.util.SpeechHelper.processSpokenName(result)
+                                                        if (processed.isNotBlank()) {
+                                                            recipientName = processed
+                                                        }
+                                                    },
+                                                    onError = { err ->
+                                                        isListeningName = false
+                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Mic,
+                                            contentDescription = "Falar Nome",
+                                            tint = if (isListeningName) MaterialTheme.colorScheme.primary else Color.Gray
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            // Documento do Recebedor (numérico)
+                            Text(
+                                text = "Documento do Recebedor (CPF / RG):",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF424242)
+                            )
+                            val isDocValidState = remember(recipientDocument) {
+                                if (recipientDocument.isBlank()) null else com.example.util.SpeechHelper.isValidDocument(recipientDocument)
+                            }
+
+                            OutlinedTextField(
+                                value = recipientDocument,
+                                onValueChange = { input ->
+                                    recipientDocument = input.filter { it.isLetterOrDigit() || it == '.' || it == '-' }
+                                },
+                                placeholder = { Text("Ex: 123.456.789-00", fontSize = 12.sp) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = when (isDocValidState) {
+                                        true -> Color(0xFF2E7D32)
+                                        false -> Color(0xFFD32F2F)
+                                        null -> MaterialTheme.colorScheme.primary
+                                    },
+                                    unfocusedBorderColor = when (isDocValidState) {
+                                        true -> Color(0xFF4CAF50)
+                                        false -> Color(0xFFE53935)
+                                        null -> MaterialTheme.colorScheme.outline
+                                    }
+                                ),
+                                supportingText = {
+                                    when (isDocValidState) {
+                                        true -> Text("Documento válido", color = Color(0xFF2E7D32), fontSize = 11.sp)
+                                        false -> Text("Documento inválido", color = Color(0xFFD32F2F), fontSize = 11.sp)
+                                        null -> null
+                                    }
+                                },
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = {
+                                            if (!isListeningDoc) {
+                                                isListeningDoc = true
+                                                com.example.util.SpeechHelper.startListening(
+                                                    context = serviceContext,
+                                                    onReady = { Toast.makeText(serviceContext, "Fale os números do documento...", Toast.LENGTH_SHORT).show() },
+                                                    onResult = { result ->
+                                                        isListeningDoc = false
+                                                        val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
+                                                        if (processed.isNotBlank()) {
+                                                            recipientDocument = processed
+                                                        }
+                                                    },
+                                                    onError = { err ->
+                                                        isListeningDoc = false
+                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Mic,
+                                            contentDescription = "Falar Documento",
+                                            tint = if (isListeningDoc) MaterialTheme.colorScheme.primary else Color.Gray
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            // Assinatura
+                            Text(
+                                text = "Assinatura do Recebedor:",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF424242)
+                            )
+
+                            if (collectedSignatureData != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFFE8F5E9),
+                                    border = BorderStroke(1.dp, Color(0xFF81C784)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Assinatura gravada", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                                        }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    isSignatureFullScreen = true
+                                                    updateWindowLayoutMode(OverlayMode.FULLSCREEN_SIGNATURE)
+                                                },
+                                                modifier = Modifier.height(30.dp),
+                                                contentPadding = PaddingValues(horizontal = 6.dp),
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text("Refazer", fontSize = 10.sp)
+                                            }
+                                            OutlinedButton(
+                                                onClick = { showBubbleClearSigConfirmDialog = true },
+                                                modifier = Modifier.height(30.dp),
+                                                contentPadding = PaddingValues(horizontal = 6.dp),
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text("Limpar", fontSize = 10.sp, color = Color.Red)
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                Button(
+                                    onClick = {
+                                        isSignatureFullScreen = true
+                                        updateWindowLayoutMode(OverlayMode.FULLSCREEN_SIGNATURE)
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(42.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2))
+                                ) {
+                                    Icon(Icons.Default.Draw, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "✍️ COLETAR ASSINATURA",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            // Botão para avançar para a aba do endereço
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(onClick = { editModalTab = "ADDRESS" }) {
+                                    Text(
+                                        text = "Editar endereço completo ➔",
+                                        fontSize = 11.5.sp,
+                                        color = Color(0xFFE65100),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
 
                         Spacer(modifier = Modifier.height(4.dp))
 
-                        // Botões Salvar / Cancelar
+                        // BOTÕES SALVAR / CANCELAR (Visíveis em ambas as abas)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1422,149 +1979,244 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             }
 
                             Button(
+                                enabled = !isSavingRecipient,
                                 onClick = {
-                                    if (recipientName.isBlank()) {
-                                        Toast.makeText(this@FloatingBubbleService, "Informe o nome do recebedor!", Toast.LENGTH_SHORT).show()
+                                    if (isSavingRecipient) return@Button
+
+                                    // Validação da rua/logradouro
+                                    if (editedStreet.trim().isBlank()) {
+                                        Toast.makeText(this@FloatingBubbleService, "Informe o logradouro / rua na aba Endereço!", Toast.LENGTH_SHORT).show()
+                                        editModalTab = "ADDRESS"
                                         return@Button
                                     }
 
-                                    val sigJson = collectedSignatureData?.toJson() ?: ""
+                                    // Validação do nome do morador
+                                    if (recipientName.trim().isBlank()) {
+                                        Toast.makeText(this@FloatingBubbleService, "Informe o nome do morador na aba Morador!", Toast.LENGTH_SHORT).show()
+                                        editModalTab = "RESIDENT"
+                                        return@Button
+                                    }
+
+                                    isSavingRecipient = true
+                                    val finalStreet = AddressNormalizer.capitalizeWords(editedStreet.trim())
+                                    val finalNum = editedNumber.trim()
+                                    val finalComp = AddressNormalizer.formatComplementToken(editedComplement.trim()).ifBlank { editedComplement.trim() }
+                                    val finalBairro = AddressNormalizer.capitalizeWords(editedNeighborhood.trim())
                                     val formattedRecipientName = AddressNormalizer.capitalizeWords(recipientName.trim())
+                                    val sigJson = collectedSignatureData?.toJson() ?: ""
 
                                     if (isAddingNewResident && editingPersonId != null) {
-                                        // Adicionar novo co-recebedor / morador para o mesmo endereço
+                                        // Adicionar novo co-recebedor / morador para o endereço
                                         serviceScope.launch(Dispatchers.IO) {
-                                            val existing = DeliveryApp.instance.personRepository.getPersonByIdDirect(editingPersonId!!)
-                                            if (existing != null) {
-                                                val extras = Recebedor.listFromJson(existing.coRecebedoresJson).toMutableList()
-                                                val newRecebedor = Recebedor(
-                                                    id = java.util.UUID.randomUUID().toString().take(8),
-                                                    nome = formattedRecipientName,
-                                                    documento = recipientDocument.trim(),
-                                                    assinatura = sigJson
-                                                )
-                                                extras.add(newRecebedor)
-                                                val updated = existing.copy(
-                                                    coRecebedoresJson = Recebedor.listToJson(extras),
-                                                    dataAtualizacao = System.currentTimeMillis()
-                                                )
-                                                DeliveryApp.instance.personRepository.updatePerson(updated)
-                                                withContext(Dispatchers.Main) {
-                                                    AccessibilityAutomationEngine.setMatchedPersonDirect(updated)
-                                                    // Selecionar o novo recebedor recém criado
-                                                    val allRecs = AccessibilityAutomationEngine.extractAllRecebedores(listOf(updated))
-                                                    val createdRec = allRecs.firstOrNull { it.id.endsWith(newRecebedor.id) }
-                                                    if (createdRec != null) {
-                                                        AccessibilityAutomationEngine.selectRecebedor(createdRec)
+                                            try {
+                                                val existing = DeliveryApp.instance.personRepository.getPersonByIdDirect(editingPersonId!!)
+                                                if (existing != null) {
+                                                    val oldPrimary = Recebedor(
+                                                        id = java.util.UUID.randomUUID().toString().take(8),
+                                                        nome = existing.nome,
+                                                        documento = existing.documento,
+                                                        assinatura = existing.assinatura,
+                                                        dataUso = existing.dataAtualizacao
+                                                    )
+                                                    val existingExtras = Recebedor.listFromJson(existing.coRecebedoresJson).toMutableList()
+                                                    val newExtras = mutableListOf<Recebedor>()
+                                                    if (oldPrimary.nome.isNotBlank()) {
+                                                        newExtras.add(oldPrimary)
                                                     }
-                                                    Toast.makeText(
-                                                        this@FloatingBubbleService,
-                                                        "Novo morador adicionado ao endereço com sucesso!",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                    isEditModalOpen = false
-                                                    updateWindowLayoutMode(OverlayMode.PANEL)
+                                                    newExtras.addAll(existingExtras)
+
+                                                    val updated = existing.copy(
+                                                        nome = formattedRecipientName,
+                                                        documento = recipientDocument.trim(),
+                                                        endereco = finalStreet,
+                                                        numero = finalNum,
+                                                        complemento = finalComp,
+                                                        bairro = finalBairro,
+                                                        assinatura = sigJson,
+                                                        coRecebedoresJson = Recebedor.listToJson(newExtras),
+                                                        dataAtualizacao = System.currentTimeMillis()
+                                                    )
+                                                    DeliveryApp.instance.personRepository.updatePerson(updated)
+                                                    withContext(Dispatchers.Main) {
+                                                        AccessibilityAutomationEngine.setMatchedPersonDirect(updated)
+                                                        val allRecs = AccessibilityAutomationEngine.extractAllRecebedores(listOf(updated))
+                                                        val newMainRec = allRecs.firstOrNull { it.id == "p_${updated.id}_main" } ?: allRecs.firstOrNull()
+                                                        if (newMainRec != null) {
+                                                            AccessibilityAutomationEngine.selectRecebedor(newMainRec)
+                                                        }
+                                                        Toast.makeText(
+                                                            this@FloatingBubbleService,
+                                                            "Novo morador e endereço salvos!",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                        isSavingRecipient = false
+                                                        isEditModalOpen = false
+                                                        updateWindowLayoutMode(OverlayMode.PANEL)
+                                                    }
+                                                } else {
+                                                    withContext(Dispatchers.Main) { isSavingRecipient = false }
+                                                }
+                                            } catch (e: Exception) {
+                                                withContext(Dispatchers.Main) {
+                                                    isSavingRecipient = false
+                                                    Toast.makeText(this@FloatingBubbleService, "Erro ao salvar: ${e.message}", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         }
                                     } else if (isEditingExisting && editingPersonId != null) {
-                                        // Atualizar cadastro existente
+                                        // Atualizar cadastro existente (endereço + dados do morador)
                                         serviceScope.launch(Dispatchers.IO) {
-                                            val existing = DeliveryApp.instance.personRepository.getPersonByIdDirect(editingPersonId!!)
-                                            if (existing != null) {
-                                                val updated = if (editingRecebedorId == null || editingRecebedorId == "main" || editingRecebedorId?.startsWith("p_${existing.id}_main") == true) {
-                                                    existing.copy(
-                                                        nome = formattedRecipientName,
-                                                        documento = recipientDocument.trim(),
-                                                        endereco = editedAddress.trim().ifBlank { existing.endereco },
-                                                        assinatura = sigJson
-                                                    )
-                                                } else {
-                                                    val extras = Recebedor.listFromJson(existing.coRecebedoresJson).toMutableList()
-                                                    val cleanId = editingRecebedorId!!.removePrefix("p_${existing.id}_co_")
-                                                    val idx = extras.indexOfFirst { it.id == cleanId || it.id == editingRecebedorId }
-                                                    if (idx >= 0) {
-                                                        extras[idx] = extras[idx].copy(
+                                            try {
+                                                val existing = DeliveryApp.instance.personRepository.getPersonByIdDirect(editingPersonId!!)
+                                                if (existing != null) {
+                                                    val updated = if (editingRecebedorId == null || editingRecebedorId == "main" || editingRecebedorId?.startsWith("p_${existing.id}_main") == true) {
+                                                        existing.copy(
                                                             nome = formattedRecipientName,
                                                             documento = recipientDocument.trim(),
-                                                            assinatura = sigJson
+                                                            endereco = finalStreet,
+                                                            numero = finalNum,
+                                                            complemento = finalComp,
+                                                            bairro = finalBairro,
+                                                            assinatura = sigJson,
+                                                            dataAtualizacao = System.currentTimeMillis()
+                                                        )
+                                                    } else {
+                                                        val extras = Recebedor.listFromJson(existing.coRecebedoresJson)
+                                                        val cleanId = editingRecebedorId!!.removePrefix("p_${existing.id}_co_")
+                                                        val otherExtras = extras.filterNot { it.id == cleanId || it.id == editingRecebedorId }
+                                                        val oldPrimary = Recebedor(
+                                                            id = java.util.UUID.randomUUID().toString().take(8),
+                                                            nome = existing.nome,
+                                                            documento = existing.documento,
+                                                            assinatura = existing.assinatura,
+                                                            dataUso = existing.dataAtualizacao
+                                                        )
+                                                        val newExtras = mutableListOf<Recebedor>()
+                                                        if (oldPrimary.nome.isNotBlank()) {
+                                                            newExtras.add(oldPrimary)
+                                                        }
+                                                        newExtras.addAll(otherExtras)
+
+                                                        existing.copy(
+                                                            nome = formattedRecipientName,
+                                                            documento = recipientDocument.trim(),
+                                                            endereco = finalStreet,
+                                                            numero = finalNum,
+                                                            complemento = finalComp,
+                                                            bairro = finalBairro,
+                                                            assinatura = sigJson,
+                                                            coRecebedoresJson = Recebedor.listToJson(newExtras),
+                                                            dataAtualizacao = System.currentTimeMillis()
                                                         )
                                                     }
-                                                    existing.copy(
-                                                        endereco = editedAddress.trim().ifBlank { existing.endereco },
-                                                        coRecebedoresJson = Recebedor.listToJson(extras)
-                                                    )
+                                                    DeliveryApp.instance.personRepository.updatePerson(updated)
+                                                    withContext(Dispatchers.Main) {
+                                                        AccessibilityAutomationEngine.setMatchedPersonDirect(updated)
+                                                        val allRecs = AccessibilityAutomationEngine.extractAllRecebedores(listOf(updated))
+                                                        if (allRecs.isNotEmpty()) {
+                                                            val selected = allRecs.firstOrNull { it.id == "p_${updated.id}_main" } ?: allRecs.first()
+                                                            AccessibilityAutomationEngine.selectRecebedor(selected)
+                                                        }
+                                                        Toast.makeText(
+                                                            this@FloatingBubbleService,
+                                                            "Dados atualizados com sucesso!",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                        isSavingRecipient = false
+                                                        isEditModalOpen = false
+                                                        updateWindowLayoutMode(OverlayMode.PANEL)
+                                                    }
+                                                } else {
+                                                    withContext(Dispatchers.Main) { isSavingRecipient = false }
                                                 }
-                                                DeliveryApp.instance.personRepository.updatePerson(updated)
+                                            } catch (e: Exception) {
                                                 withContext(Dispatchers.Main) {
-                                                    AccessibilityAutomationEngine.setMatchedPersonDirect(updated)
-                                                    Toast.makeText(
-                                                        this@FloatingBubbleService,
-                                                        "Destinatário atualizado com sucesso!",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                    isEditModalOpen = false
-                                                    updateWindowLayoutMode(OverlayMode.PANEL)
+                                                    isSavingRecipient = false
+                                                    Toast.makeText(this@FloatingBubbleService, "Erro ao atualizar: ${e.message}", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         }
                                     } else {
                                         // Inserir novo cadastro
-                                        if (editedAddress.isBlank()) {
-                                            Toast.makeText(this@FloatingBubbleService, "Informe a rua e número do endereço!", Toast.LENGTH_SHORT).show()
-                                            return@Button
-                                        }
-
                                         serviceScope.launch(Dispatchers.IO) {
-                                            val existingList = emptyList<Person>()
-                                            if (false) {
-                                                val basePerson = existingList.first()
-                                                val extras = Recebedor.listFromJson(basePerson.coRecebedoresJson).toMutableList()
-                                                val newRecebedor = Recebedor(
-                                                    id = java.util.UUID.randomUUID().toString().take(8),
-                                                    nome = formattedRecipientName,
-                                                    documento = recipientDocument.trim(),
-                                                    assinatura = sigJson
-                                                )
-                                                extras.add(newRecebedor)
-                                                val updated = basePerson.copy(
-                                                    coRecebedoresJson = Recebedor.listToJson(extras),
-                                                    dataAtualizacao = System.currentTimeMillis()
-                                                )
-                                                DeliveryApp.instance.personRepository.updatePerson(updated)
-                                                withContext(Dispatchers.Main) {
-                                                    AccessibilityAutomationEngine.setMatchedPersonDirect(updated)
-                                                    val allRecs = AccessibilityAutomationEngine.extractAllRecebedores(listOf(updated))
-                                                    val createdRec = allRecs.firstOrNull { it.id.endsWith(newRecebedor.id) }
-                                                    if (createdRec != null) {
-                                                        AccessibilityAutomationEngine.selectRecebedor(createdRec)
+                                            try {
+                                                val existingList = DeliveryApp.instance.personRepository.findPersonsByAddress(finalStreet)
+                                                val matchingHouse = existingList.firstOrNull { it.numero.trim() == finalNum } ?: existingList.firstOrNull()
+                                                if (matchingHouse != null) {
+                                                    val oldPrimary = Recebedor(
+                                                        id = java.util.UUID.randomUUID().toString().take(8),
+                                                        nome = matchingHouse.nome,
+                                                        documento = matchingHouse.documento,
+                                                        assinatura = matchingHouse.assinatura,
+                                                        dataUso = matchingHouse.dataAtualizacao
+                                                    )
+                                                    val existingExtras = Recebedor.listFromJson(matchingHouse.coRecebedoresJson).toMutableList()
+                                                    val newExtras = mutableListOf<Recebedor>()
+                                                    if (oldPrimary.nome.isNotBlank()) {
+                                                        newExtras.add(oldPrimary)
                                                     }
-                                                    Toast.makeText(
-                                                        this@FloatingBubbleService,
-                                                        "Destinatário adicionado ao endereço com sucesso!",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                    isEditModalOpen = false
-                                                    updateWindowLayoutMode(OverlayMode.PANEL)
+                                                    newExtras.addAll(existingExtras)
+
+                                                    val updated = matchingHouse.copy(
+                                                        nome = formattedRecipientName,
+                                                        documento = recipientDocument.trim(),
+                                                        endereco = finalStreet,
+                                                        numero = finalNum,
+                                                        complemento = finalComp.ifBlank { matchingHouse.complemento },
+                                                        bairro = finalBairro.ifBlank { matchingHouse.bairro },
+                                                        assinatura = sigJson,
+                                                        coRecebedoresJson = Recebedor.listToJson(newExtras),
+                                                        dataAtualizacao = System.currentTimeMillis()
+                                                    )
+                                                    DeliveryApp.instance.personRepository.updatePerson(updated)
+                                                    withContext(Dispatchers.Main) {
+                                                        AccessibilityAutomationEngine.setMatchedPersonDirect(updated)
+                                                        val allRecs = AccessibilityAutomationEngine.extractAllRecebedores(listOf(updated))
+                                                        val newMainRec = allRecs.firstOrNull { it.id == "p_${updated.id}_main" } ?: allRecs.firstOrNull()
+                                                        if (newMainRec != null) {
+                                                            AccessibilityAutomationEngine.selectRecebedor(newMainRec)
+                                                        }
+                                                        Toast.makeText(
+                                                            this@FloatingBubbleService,
+                                                            "Destinatário adicionado e selecionado!",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                        isSavingRecipient = false
+                                                        isEditModalOpen = false
+                                                        updateWindowLayoutMode(OverlayMode.PANEL)
+                                                    }
+                                                } else {
+                                                    val newPerson = Person(
+                                                        nome = formattedRecipientName,
+                                                        documento = recipientDocument.trim(),
+                                                        endereco = finalStreet,
+                                                        numero = finalNum,
+                                                        complemento = finalComp,
+                                                        bairro = finalBairro,
+                                                        assinatura = sigJson
+                                                    )
+                                                    val newId = DeliveryApp.instance.personRepository.insertPerson(newPerson)
+                                                    val saved = newPerson.copy(id = newId)
+                                                    withContext(Dispatchers.Main) {
+                                                        AccessibilityAutomationEngine.setMatchedPersonDirect(saved)
+                                                        val allRecs = AccessibilityAutomationEngine.extractAllRecebedores(listOf(saved))
+                                                        if (allRecs.isNotEmpty()) {
+                                                            AccessibilityAutomationEngine.selectRecebedor(allRecs.first())
+                                                        }
+                                                        Toast.makeText(
+                                                            this@FloatingBubbleService,
+                                                            "Destinatário cadastrado com sucesso!",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                        isSavingRecipient = false
+                                                        isEditModalOpen = false
+                                                        updateWindowLayoutMode(OverlayMode.PANEL)
+                                                    }
                                                 }
-                                            } else {
-                                                val newPerson = Person(
-                                                    nome = formattedRecipientName,
-                                                    documento = recipientDocument.trim(),
-                                                    endereco = editedAddress.trim(),
-                                                    assinatura = sigJson
-                                                )
-                                                val newId = DeliveryApp.instance.personRepository.insertPerson(newPerson)
-                                                val saved = newPerson.copy(id = newId)
+                                            } catch (e: Exception) {
                                                 withContext(Dispatchers.Main) {
-                                                    AccessibilityAutomationEngine.setMatchedPersonDirect(saved)
-                                                    Toast.makeText(
-                                                        this@FloatingBubbleService,
-                                                        "Destinatário cadastrado com sucesso!",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                    isEditModalOpen = false
-                                                    updateWindowLayoutMode(OverlayMode.PANEL)
+                                                    isSavingRecipient = false
+                                                    Toast.makeText(this@FloatingBubbleService, "Erro ao cadastrar: ${e.message}", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         }
@@ -1578,17 +2230,31 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     containerColor = if (isEditingExisting) Color(0xFF0288D1) else if (isAddingNewResident) Color(0xFF6A1B9A) else Color(0xFFE65100)
                                 )
                             ) {
-                                Icon(
-                                    imageVector = if (isEditingExisting) Icons.Default.Check else Icons.Default.PersonAdd,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = if (isEditingExisting) "SALVAR ALTERAÇÃO" else if (isAddingNewResident) "SALVAR MORADOR" else "SALVAR NOVO",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                if (isSavingRecipient) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = Color.White,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "SALVANDO...",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = if (isEditingExisting) Icons.Default.Check else Icons.Default.PersonAdd,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (isEditingExisting) "SALVAR ALTERAÇÃO" else if (isAddingNewResident) "SALVAR MORADOR" else "SALVAR NOVO",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
                     }
@@ -1836,6 +2502,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         .fillMaxWidth()
                                         .clickable {
                                             AccessibilityAutomationEngine.selectRecebedor(r)
+                                            AccessibilityAutomationEngine.prioritizeRecebedor(r)
                                             isMultipleRecipientsModalOpen = false
                                             updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
                                             Toast.makeText(
@@ -2226,6 +2893,35 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = Color(0xFFE3F2FD),
+                                    border = BorderStroke(0.5.dp, Color(0xFF90CAF9)),
+                                    modifier = Modifier
+                                        .clickable {
+                                            openEditForCurrent("ADDRESS", false)
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "Editar Endereço",
+                                            tint = Color(0xFF0D47A1),
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(2.dp))
+                                        Text(
+                                            text = "Editar",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF0D47A1)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
                                 if (hasDetectedAddress) {
                                     Surface(
                                         shape = RoundedCornerShape(4.dp),
@@ -2284,7 +2980,10 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             fontWeight = FontWeight.Medium,
                             color = if (address.isBlank()) Color.Gray else Color(0xFF212121),
                             maxLines = if (isCompactMode) 1 else 2,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable {
+                                openEditForCurrent("ADDRESS", false)
+                            }
                         )
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -2316,12 +3015,12 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                             color = Color(0xFF2E7D32)
                                         )
                                         IconButton(
-                                            onClick = { openEditForCurrent(false) },
+                                            onClick = { openEditForCurrent("RESIDENT", false) },
                                             modifier = Modifier.size(24.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.Edit,
-                                                contentDescription = "Editar",
+                                                contentDescription = "Editar Morador",
                                                 tint = Color(0xFF0288D1),
                                                 modifier = Modifier.size(15.dp)
                                             )
@@ -2381,7 +3080,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     ) {
                                         Icon(Icons.Default.PersonAdd, contentDescription = null, tint = Color(0xFF6A1B9A), modifier = Modifier.size(12.dp))
                                         Spacer(modifier = Modifier.width(3.dp))
-                                        Text("+ + Outro Morador", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF6A1B9A))
+                                        Text("Outro Morador", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF6A1B9A))
                                     }
                                 }
                             }
@@ -2406,6 +3105,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         ),
                                         modifier = Modifier.clickable {
                                             AccessibilityAutomationEngine.selectRecebedor(r)
+                                            AccessibilityAutomationEngine.prioritizeRecebedor(r)
                                         }
                                     ) {
                                         Row(
@@ -2459,7 +3159,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         ) {
                                             if (isSigMissing) {
                                                 Button(
-                                                    onClick = { openEditForCurrent(false) },
+                                                    onClick = { openEditForCurrent("RESIDENT", false) },
                                                     modifier = Modifier.weight(1.2f).height(30.dp),
                                                     shape = RoundedCornerShape(6.dp),
                                                     contentPadding = PaddingValues(horizontal = 4.dp),
@@ -2472,7 +3172,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                             }
                                             if (isDocMissing) {
                                                 Button(
-                                                    onClick = { openEditForCurrent(true) },
+                                                    onClick = { openEditForCurrent("RESIDENT", true) },
                                                     modifier = Modifier.weight(1.2f).height(30.dp),
                                                     shape = RoundedCornerShape(6.dp),
                                                     contentPadding = PaddingValues(horizontal = 4.dp),
@@ -2484,12 +3184,20 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 }
                                             }
                                             OutlinedButton(
-                                                onClick = { openEditForCurrent(false) },
+                                                onClick = { openEditForCurrent("RESIDENT", false) },
                                                 modifier = Modifier.weight(1f).height(30.dp),
                                                 shape = RoundedCornerShape(6.dp),
-                                                contentPadding = PaddingValues(horizontal = 4.dp)
+                                                contentPadding = PaddingValues(horizontal = 2.dp)
                                             ) {
-                                                Text("Editar", fontSize = 9.sp)
+                                                Text("Morador", fontSize = 8.5.sp, maxLines = 1)
+                                            }
+                                            OutlinedButton(
+                                                onClick = { openEditForCurrent("ADDRESS", false) },
+                                                modifier = Modifier.weight(1f).height(30.dp),
+                                                shape = RoundedCornerShape(6.dp),
+                                                contentPadding = PaddingValues(horizontal = 2.dp)
+                                            ) {
+                                                Text("Endereço", fontSize = 8.5.sp, maxLines = 1)
                                             }
                                         }
                                     }
@@ -2550,6 +3258,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             // Botão 1: Preencher Nome e Doc no App
                             Button(
                                 onClick = {
+                                    AccessibilityAutomationEngine.prioritizeRecebedor(person)
                                     if (appSettings.vibrationEnabled) {
                                         triggerHapticFeedback()
                                     }
@@ -2583,6 +3292,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             if (hasSignature) {
                                 Button(
                                     onClick = {
+                                        AccessibilityAutomationEngine.prioritizeRecebedor(person)
                                         if (appSettings.vibrationEnabled) {
                                             triggerHapticFeedback()
                                         }
@@ -2614,6 +3324,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             ) {
                                 OutlinedButton(
                                     onClick = {
+                                        AccessibilityAutomationEngine.prioritizeRecebedor(person)
                                         if (appSettings.vibrationEnabled) {
                                             triggerHapticFeedback()
                                         }
@@ -2632,6 +3343,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
                                 OutlinedButton(
                                     onClick = {
+                                        AccessibilityAutomationEngine.prioritizeRecebedor(person)
                                         if (appSettings.vibrationEnabled) {
                                             triggerHapticFeedback()
                                         }
@@ -2651,6 +3363,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 if (hasSignature) {
                                     OutlinedButton(
                                         onClick = {
+                                            AccessibilityAutomationEngine.prioritizeRecebedor(person)
                                             if (appSettings.vibrationEnabled) {
                                                 triggerHapticFeedback()
                                             }
@@ -2674,19 +3387,27 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                         } else {
                             Button(
                                 onClick = {
-                                    val extracted = AddressNormalizer.extractStreetAndNumber(address)
+                                    val detected = automationState.detectedAddressText.trim()
+                                    val parsed = AddressNormalizer.parseAddressComponents(detected)
                                     editingPersonId = null
                                     editingRecebedorId = null
-                                    editedAddress = extracted
+                                    editedStreet = parsed.street
+                                    editedNumber = parsed.number
+                                    editedComplement = parsed.complement
+                                    editedNeighborhood = parsed.neighborhood
                                     recipientName = ""
                                     recipientDocument = ""
                                     collectedSignatureData = null
 
-                                    initialEditedAddress = extracted
+                                    initialEditedStreet = parsed.street
+                                    initialEditedNumber = parsed.number
+                                    initialEditedComplement = parsed.complement
+                                    initialEditedNeighborhood = parsed.neighborhood
                                     initialRecipientName = ""
                                     initialRecipientDocument = ""
                                     initialCollectedSigJson = ""
 
+                                    editModalTab = if (parsed.street.isNotBlank()) "RESIDENT" else "ADDRESS"
                                     isEditModalOpen = true
                                     updateWindowLayoutMode(OverlayMode.MODAL)
                                 },

@@ -1,0 +1,8 @@
+{
+  "versionCode": 8,
+  "versionName": "1.1.6",
+  "title": "v1.1.6 - Sincronização com Progresso, Feedback Sonoro e Otimizações",
+  "apkUrl": "https://github.com/AvertonDias/Assistente-de-entregas/releases/download/v1.1.6/app-release.apk",
+  "changelog": "• Barra de progresso detalhada na sincronização com a nuvem (envio e download).\n• Feedback sonoro de sucesso aprimorado, mais alto e compatível com todos os dispositivos.\n• Limpeza na tela de configurações e ajustes de layout nos botões do balão flutuante.\n• Entrada de texto com microfone/reconhecimento de voz em todos os campos.",
+  "forceUpdate": false
+}

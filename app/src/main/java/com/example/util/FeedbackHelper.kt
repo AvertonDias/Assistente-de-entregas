@@ -20,8 +20,13 @@ object FeedbackHelper {
     private fun getToneGenerator(): ToneGenerator? {
         if (toneGenerator == null) {
             try {
-                toneGenerator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 35)
-            } catch (_: Exception) {}
+                // STREAM_MUSIC garante áudio nítido e audível mesmo se sons de toque do teclado do sistema estiverem desligados
+                toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 85)
+            } catch (_: Exception) {
+                try {
+                    toneGenerator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90)
+                } catch (_: Exception) {}
+            }
         }
         return toneGenerator
     }
@@ -112,19 +117,18 @@ object FeedbackHelper {
 
     private fun triggerSuccessSound(context: Context) {
         try {
-            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-            // Toca um efeito suave padrão do sistema ou um pequeno tom agradável
-            val played = audioManager?.let {
-                it.playSoundEffect(AudioManager.FX_KEY_CLICK, 0.6f)
-                true
-            } ?: false
-
-            if (!played) {
-                getToneGenerator()?.startTone(ToneGenerator.TONE_PROP_ACK, 60)
+            val tg = getToneGenerator()
+            if (tg != null) {
+                // Toca um tom de confirmação positivo, nítido e com excelente clareza sonora (120ms)
+                tg.startTone(ToneGenerator.TONE_PROP_BEEP2, 120)
+            } else {
+                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                audioManager?.playSoundEffect(AudioManager.FX_KEY_CLICK, 1.0f)
             }
         } catch (_: Exception) {
             try {
-                getToneGenerator()?.startTone(ToneGenerator.TONE_PROP_ACK, 60)
+                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                audioManager?.playSoundEffect(AudioManager.FX_KEY_CLICK, 1.0f)
             } catch (_: Exception) {}
         }
     }

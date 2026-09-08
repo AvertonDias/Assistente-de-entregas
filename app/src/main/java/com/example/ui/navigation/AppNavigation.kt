@@ -23,6 +23,7 @@ import com.example.ui.screens.people.PersonEditScreen
 import com.example.ui.screens.settings.AccessibilitySettingsScreen
 import com.example.ui.screens.settings.OverlaySettingsScreen
 import com.example.ui.screens.settings.SettingsScreen
+import com.example.ui.screens.settings.SettingsViewModel
 import com.example.ui.screens.signature.SignatureScreen
 
 @Composable
@@ -183,9 +184,17 @@ fun AppNavigation(
         }
 
         composable(Screen.Settings.route) {
+            val settingsViewModel: SettingsViewModel = viewModel(
+                factory = SettingsViewModel.Factory(
+                    app.settingsRepository,
+                    app.firebaseSyncRepository,
+                    app.personRepository
+                )
+            )
             SettingsScreen(
                 settingsRepository = app.settingsRepository,
                 firebaseSyncRepository = app.firebaseSyncRepository,
+                viewModel = settingsViewModel,
                 onNavigateBack = { navController.popBackStack() }
             )
         }

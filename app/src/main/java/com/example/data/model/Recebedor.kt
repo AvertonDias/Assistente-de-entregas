@@ -7,7 +7,8 @@ data class Recebedor(
     val id: String = java.util.UUID.randomUUID().toString(),
     val nome: String,
     val documento: String,
-    val assinatura: String = "" // JSON estruturado da assinatura
+    val assinatura: String = "", // JSON estruturado da assinatura
+    val dataUso: Long = 0L
 ) {
     fun toJsonObject(): JSONObject {
         val obj = JSONObject()
@@ -15,16 +16,20 @@ data class Recebedor(
         obj.put("nome", nome)
         obj.put("documento", documento)
         obj.put("assinatura", assinatura)
+        obj.put("dataUso", dataUso)
         return obj
     }
 
     companion object {
         fun fromJsonObject(obj: JSONObject): Recebedor {
+            val rawId = obj.optString("id", "").trim()
+            val finalId = if (rawId.isNotBlank()) rawId else java.util.UUID.randomUUID().toString()
             return Recebedor(
-                id = obj.optString("id", java.util.UUID.randomUUID().toString()),
+                id = finalId,
                 nome = obj.optString("nome", ""),
                 documento = obj.optString("documento", ""),
-                assinatura = obj.optString("assinatura", "")
+                assinatura = obj.optString("assinatura", ""),
+                dataUso = obj.optLong("dataUso", 0L)
             )
         }
 

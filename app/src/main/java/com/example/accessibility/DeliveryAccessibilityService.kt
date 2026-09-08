@@ -30,6 +30,13 @@ class DeliveryAccessibilityService : AccessibilityService() {
         ) {
             val root = rootInActiveWindow
             AccessibilityAutomationEngine.onWindowOrContentChanged(pkg, cls, root)
+        } else if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+            event.eventType == AccessibilityEvent.TYPE_VIEW_SELECTED
+        ) {
+            val source = event.source
+            if (source != null) {
+                AccessibilityAutomationEngine.onNodeClickedOrSelected(pkg, cls, source)
+            }
         }
     }
 
