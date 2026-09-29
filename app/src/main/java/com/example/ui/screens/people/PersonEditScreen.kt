@@ -30,11 +30,13 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -42,6 +44,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -95,6 +99,7 @@ fun PersonEditScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val screenOpenTime = remember { android.os.SystemClock.elapsedRealtime() }
     val activity = remember(context) {
         var ctx = context
         while (ctx is android.content.ContextWrapper) {
@@ -194,6 +199,8 @@ fun PersonEditScreen(
     var editingRecebedor by remember { mutableStateOf<Recebedor?>(null) }
     var isNewRecebedor by remember { mutableStateOf(false) }
     var recebedorToDelete by remember { mutableStateOf<Pair<Int, Recebedor>?>(null) }
+    var loadedPerson by remember { mutableStateOf<Person?>(null) }
+    var moveCopyTargetRecebedor by remember { mutableStateOf<Recebedor?>(null) }
 
     // Signature Fullscreen Modal state
     var isSignatureModalOpen by remember { mutableStateOf(false) }
@@ -219,6 +226,7 @@ fun PersonEditScreen(
         if (personId > 0) {
             val existing = viewModel.getPersonById(personId)
             if (existing != null) {
+                loadedPerson = existing
                 var cleanStreet = existing.endereco
                 var cleanComp = existing.complemento
 
@@ -396,7 +404,7 @@ fun PersonEditScreen(
                         ) {
                             OutlinedTextField(
                                 value = number,
-                                onValueChange = { number = it },
+                                onValueChange = { number = it.replace(".", "") },
                                 label = { Text("Número") },
                                 placeholder = { Text("Ex: 100") },
                                 trailingIcon = {
@@ -662,10 +670,23 @@ fun PersonEditScreen(
                                         }
                                     }
 
-                                    Row(
+                                     Row(
                                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        IconButton(
+                                            onClick = {
+                                                moveCopyTargetRecebedor = rec
+                                            },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ContentCopy,
+                                                contentDescription = "Mover ou Copiar Morador",
+                                                tint = MaterialTheme.colorScheme.secondary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
                                         IconButton(
                                             onClick = {
                                                 editingRecebedor = rec
@@ -764,7 +785,8 @@ fun PersonEditScreen(
 
                         val finalStreet = if (parsedAddr != null && parsedAddr.street.isNotBlank()) parsedAddr.street else address.trim()
                         val finalNum = if (parsedAddr != null && parsedAddr.number.isNotBlank()) parsedAddr.number else number.trim()
-                        val finalComp = if (parsedAddr != null && parsedAddr.complement.isNotBlank() && complement.isBlank()) parsedAddr.complement else complement.trim()
+                        val rawComp = if (parsedAddr != null && parsedAddr.complement.isNotBlank() && complement.isBlank()) parsedAddr.complement else complement.trim()
+                        val finalComp = AddressNormalizer.formatComplementToken(rawComp).ifBlank { rawComp }
                         val finalBairro = if (parsedAddr != null && parsedAddr.neighborhood.isNotBlank() && neighborhood.isBlank()) parsedAddr.neighborhood else neighborhood.trim()
 
                         val person = Person(
@@ -782,7 +804,8 @@ fun PersonEditScreen(
                             coRecebedoresJson = Recebedor.listToJson(extraList)
                         )
 
-                        viewModel.savePerson(person) {
+                        val formDuration = android.os.SystemClock.elapsedRealtime() - screenOpenTime
+                        viewModel.savePerson(person, durationMs = formDuration) {
                             FeedbackHelper.triggerSuccess(context)
                             Toast.makeText(context, "Destinatário salvo com sucesso!", Toast.LENGTH_SHORT).show()
                             onNavigateBack()
@@ -899,9 +922,31 @@ fun PersonEditScreen(
                 },
                 onClearSignature = {
                     editingRecebedor = editingRecebedor?.copy(assinatura = "")
+                },
+                onMoveOrCopy = { targetRec ->
+                    moveCopyTargetRecebedor = targetRec
                 }
             )
         }
+    }
+
+    // Modal de Mover / Copiar Recebedor para outro endereço
+    if (moveCopyTargetRecebedor != null) {
+        MoveOrCopyReceiverDialog(
+            receiver = moveCopyTargetRecebedor!!,
+            sourcePerson = loadedPerson,
+            currentAddress = address,
+            viewModel = viewModel,
+            onDismiss = { moveCopyTargetRecebedor = null },
+            onSuccess = { isMove ->
+                if (isMove) {
+                    val targetId = moveCopyTargetRecebedor?.id
+                    recebedoresList = recebedoresList.filter { it.id != targetId }
+                }
+                moveCopyTargetRecebedor = null
+                editingRecebedor = null
+            }
+        )
     }
 
     // TELA TODA DE ASSINATURA HORIZONTAL MÁXIMA
@@ -944,7 +989,8 @@ fun RecebedorDialog(
     onDismiss: () -> Unit,
     onSave: (Recebedor) -> Unit,
     onCollectSignature: (String, String, String) -> Unit,
-    onClearSignature: () -> Unit
+    onClearSignature: () -> Unit,
+    onMoveOrCopy: ((Recebedor) -> Unit)? = null
 ) {
     var nome by remember { mutableStateOf(recebedor.nome) }
     var documento by remember { mutableStateOf(recebedor.documento) }
@@ -1283,6 +1329,47 @@ fun RecebedorDialog(
                         Text("Coletar Assinatura")
                     }
                 }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                // Botão para copiar texto do morador para área de transferência
+                OutlinedButton(
+                    onClick = {
+                        val textToCopy = buildString {
+                            append("Nome: ").append(nome.ifBlank { "Sem nome" })
+                            if (documento.isNotBlank()) append("\nDocumento: ").append(documento)
+                        }
+                        com.example.util.ClipboardHelper.copyToClipboard(context, "Morador", textToCopy)
+                        Toast.makeText(context, "Dados do morador copiados!", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Copiar Nome / Documento", fontSize = 12.5.sp)
+                }
+
+                // Botão para Mover ou Copiar Morador para outro endereço
+                if (onMoveOrCopy != null) {
+                    OutlinedButton(
+                        onClick = {
+                            val currentRec = recebedor.copy(
+                                nome = AddressNormalizer.capitalizeWords(nome.trim()),
+                                documento = documento.trim(),
+                                assinatura = localAssinatura
+                            )
+                            onMoveOrCopy(currentRec)
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.secondary)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Mover / Copiar para Outro Endereço", fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         },
         confirmButton = {
@@ -1306,6 +1393,272 @@ fun RecebedorDialog(
         },
         dismissButton = {
             TextButton(onClick = handleAttemptDismiss) {
+                Text("Cancelar")
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MoveOrCopyReceiverDialog(
+    receiver: Recebedor,
+    sourcePerson: Person?,
+    currentAddress: String,
+    viewModel: PeopleViewModel,
+    onDismiss: () -> Unit,
+    onSuccess: (isMove: Boolean) -> Unit
+) {
+    val context = LocalContext.current
+    var isMove by remember { mutableStateOf(true) } // true = Mover, false = Copiar
+    var targetStreet by remember { mutableStateOf("") }
+    var targetNumber by remember { mutableStateOf("") }
+    var targetComplement by remember { mutableStateOf("") }
+    var targetBairro by remember { mutableStateOf("") }
+    var streetError by remember { mutableStateOf(false) }
+
+    val allPersons by viewModel.persons.collectAsStateWithLifecycle()
+    var searchQuery by remember { mutableStateOf("") }
+
+    val suggestedPersons = remember(allPersons, searchQuery) {
+        if (searchQuery.isBlank()) {
+            allPersons.take(4)
+        } else {
+            allPersons.filter { p ->
+                p.endereco.contains(searchQuery, ignoreCase = true) ||
+                        p.numero.contains(searchQuery, ignoreCase = true) ||
+                        p.bairro.contains(searchQuery, ignoreCase = true) ||
+                        p.nome.contains(searchQuery, ignoreCase = true)
+            }.take(5)
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            DialogBlurEffect()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.ContentCopy,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isMove) "Mover Morador" else "Copiar Morador",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Info do morador
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "👤 ${receiver.nome.ifBlank { "Sem nome" }}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (receiver.documento.isNotBlank()) {
+                            Text(
+                                text = "Doc: ${receiver.documento}",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                }
+
+                // Opção de Ação (Mover vs Copiar)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = isMove,
+                        onClick = { isMove = true },
+                        label = { Text("🚚 Mover (Transferir)", fontSize = 11.5.sp) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = !isMove,
+                        onClick = { isMove = false },
+                        label = { Text("📋 Copiar (Duplicar)", fontSize = 11.5.sp) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Text(
+                    text = if (isMove)
+                        "Ao mover, este morador será transferido para o novo endereço."
+                    else
+                        "Ao copiar, este morador será duplicado para o novo endereço, mantendo também o cadastro original.",
+                    fontSize = 11.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                HorizontalDivider()
+
+                Text(
+                    text = "Endereço de Destino",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.5.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                // Busca rápida de endereços existentes
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    label = { Text("Buscar Endereço Salvo...") },
+                    placeholder = { Text("Digite rua, número ou nome...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                if (suggestedPersons.isNotEmpty()) {
+                    Text(
+                        text = "Toque em um endereço para selecionar:",
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        suggestedPersons.forEach { person ->
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        targetStreet = person.endereco
+                                        targetNumber = person.numero
+                                        targetComplement = person.complemento
+                                        targetBairro = person.bairro
+                                        searchQuery = ""
+                                        streetError = false
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.LocationOn,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Column {
+                                        Text(
+                                            text = "${person.endereco}${if (person.numero.isNotBlank()) ", ${person.numero}" else ""}",
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        if (person.bairro.isNotBlank() || person.complemento.isNotBlank()) {
+                                            Text(
+                                                text = "${person.complemento} ${person.bairro}".trim(),
+                                                fontSize = 11.sp,
+                                                color = Color.Gray
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider()
+
+                // Preenchimento manual do endereço de destino
+                OutlinedTextField(
+                    value = targetStreet,
+                    onValueChange = {
+                        targetStreet = it
+                        streetError = it.isBlank()
+                    },
+                    label = { Text("Rua / Logradouro de Destino *") },
+                    isError = streetError,
+                    supportingText = { if (streetError) Text("Informe a rua de destino") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = targetNumber,
+                        onValueChange = { targetNumber = it },
+                        label = { Text("Número") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = targetComplement,
+                        onValueChange = { targetComplement = it },
+                        label = { Text("Complemento") },
+                        modifier = Modifier.weight(1.2f),
+                        singleLine = true
+                    )
+                }
+
+                OutlinedTextField(
+                    value = targetBairro,
+                    onValueChange = { targetBairro = it },
+                    label = { Text("Bairro") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (targetStreet.isBlank()) {
+                        streetError = true
+                        return@Button
+                    }
+                    viewModel.moveOrCopyReceiver(
+                        sourcePerson = sourcePerson,
+                        receiver = receiver,
+                        isMove = isMove,
+                        targetAddress = targetStreet,
+                        targetNumber = targetNumber,
+                        targetComplement = targetComplement,
+                        targetBairro = targetBairro,
+                        onComplete = {
+                            FeedbackHelper.triggerSuccess(context)
+                            val actionText = if (isMove) "movido" else "copiado"
+                            Toast.makeText(context, "Morador $actionText com sucesso!", Toast.LENGTH_SHORT).show()
+                            onSuccess(isMove)
+                        }
+                    )
+                }
+            ) {
+                Text(if (isMove) "Mover Morador" else "Copiar Morador", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
                 Text("Cancelar")
             }
         }

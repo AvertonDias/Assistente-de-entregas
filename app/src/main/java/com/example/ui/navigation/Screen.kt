@@ -15,5 +15,6 @@ sealed class Screen(val route: String, val title: String) {
     object AccessibilitySettings : Screen("accessibility_settings", "Acessibilidade")
     object OverlaySettings : Screen("overlay_settings", "Sobreposição")
     object Diagnostic : Screen("diagnostic", "Diagnóstico")
+    object DailyReport : Screen("daily_report", "Relatório Diário")
     object Settings : Screen("settings", "Configurações")
 }

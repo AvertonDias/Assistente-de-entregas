@@ -92,40 +92,7 @@ class PeopleViewModel(
      */
     fun removeReceiverFromPerson(person: Person, receiverIndex: Int, onComplete: (() -> Unit)? = null) {
         viewModelScope.launch {
-            val allRecebedores = mutableListOf<Recebedor>()
-            if (person.nome.isNotBlank() || person.documento.isNotBlank()) {
-                allRecebedores.add(
-                    Recebedor(
-                        id = "main",
-                        nome = person.nome,
-                        documento = person.documento,
-                        assinatura = person.assinatura
-                    )
-                )
-            }
-            if (person.coRecebedoresJson.isNotBlank()) {
-                try {
-                    allRecebedores.addAll(Recebedor.listFromJson(person.coRecebedoresJson))
-                } catch (_: Throwable) {}
-            }
-
-            if (receiverIndex in allRecebedores.indices) {
-                val updatedList = allRecebedores.filterIndexed { i, _ -> i != receiverIndex }
-                if (updatedList.isEmpty()) {
-                    personRepository.deletePerson(person)
-                } else {
-                    val newPrimary = updatedList.first()
-                    val newExtras = updatedList.drop(1)
-                    val updatedPerson = person.copy(
-                        nome = newPrimary.nome,
-                        documento = newPrimary.documento,
-                        assinatura = newPrimary.assinatura,
-                        coRecebedoresJson = Recebedor.listToJson(newExtras),
-                        dataAtualizacao = System.currentTimeMillis()
-                    )
-                    personRepository.updatePerson(updatedPerson)
-                }
-            }
+            personRepository.removeReceiverFromPerson(person, receiverIndex)
             onComplete?.invoke()
         }
     }
@@ -134,14 +101,23 @@ class PeopleViewModel(
         return personRepository.getPersonByIdDirect(id)
     }
 
-    fun savePerson(person: Person, onComplete: () -> Unit) {
+    fun savePerson(person: Person, durationMs: Long = 0L, onComplete: () -> Unit) {
         viewModelScope.launch {
+            val isEdit = person.id > 0
+            val actionTitle = if (isEdit) "Destinatário Editado Manualmente" else "Novo Destinatário Cadastrado Manualmente"
+            val actionDetails = "Nome: ${person.nome}, Endereço: ${person.endereco}${if (person.numero.isNotBlank()) ", Nº ${person.numero}" else ""}"
+
             if (person.id > 0) {
                 personRepository.updatePerson(person.copy(dataAtualizacao = System.currentTimeMillis()))
             } else {
-                val existingList = personRepository.findPersonsByAddress(person.endereco)
-                if (existingList.isNotEmpty() && person.nome.isNotBlank() && existingList.first().nome.isNotBlank()) {
-                    val basePerson = existingList.first()
+                val fullAddress = if (person.numero.isNotBlank()) "${person.endereco}, ${person.numero}" else person.endereco
+                val existingList = personRepository.findPersonsByAddress(fullAddress)
+                val matchingHouse = existingList.firstOrNull {
+                    AddressNormalizer.areNumbersMatching(it.numero, person.numero) &&
+                    (person.complemento.isBlank() || it.complemento.isBlank() || it.complemento.equals(person.complemento, ignoreCase = true))
+                }
+                if (matchingHouse != null && person.nome.isNotBlank() && matchingHouse.nome.isNotBlank()) {
+                    val basePerson = matchingHouse
                     val oldPrimary = Recebedor(
                         id = "co_${System.currentTimeMillis().toString().takeLast(6)}",
                         nome = basePerson.nome,
@@ -172,6 +148,18 @@ class PeopleViewModel(
             try {
                 personRepository.consolidateDuplicateAddressPersons()
             } catch (_: Throwable) {}
+
+            try {
+                com.example.util.AppActivityTracker.logAction(
+                    actionType = if (isEdit) "MANUAL_PERSON_EDIT" else "MANUAL_PERSON_CREATE",
+                    title = actionTitle,
+                    details = actionDetails,
+                    category = "Cadastros",
+                    durationMs = durationMs,
+                    incrementPerson = true
+                )
+            } catch (_: Throwable) {}
+
             onComplete()
         }
     }
@@ -180,6 +168,33 @@ class PeopleViewModel(
         viewModelScope.launch {
             val count = personRepository.consolidateDuplicateAddressPersons()
             onResult(count)
+        }
+    }
+
+    /**
+     * Move ou copia um recebedor/morador para um endereço de destino (existente ou novo).
+     */
+    fun moveOrCopyReceiver(
+        sourcePerson: Person?,
+        receiver: Recebedor,
+        isMove: Boolean,
+        targetAddress: String,
+        targetNumber: String,
+        targetComplement: String,
+        targetBairro: String,
+        onComplete: () -> Unit
+    ) {
+        viewModelScope.launch {
+            personRepository.moveOrCopyReceiver(
+                sourcePerson = sourcePerson,
+                receiver = receiver,
+                isMove = isMove,
+                targetAddress = targetAddress,
+                targetNumber = targetNumber,
+                targetComplement = targetComplement,
+                targetBairro = targetBairro
+            )
+            onComplete()
         }
     }
 

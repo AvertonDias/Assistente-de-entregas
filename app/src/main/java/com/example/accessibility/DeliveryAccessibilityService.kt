@@ -24,11 +24,15 @@ class DeliveryAccessibilityService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: ""
         val cls = event.className?.toString() ?: ""
 
-        // Ignorar eventos do próprio teclado se necessário
+        // Ignorar eventos do próprio app (balão/painel), teclado do sistema e systemui para não gerar lentidão ou loops
+        if (pkg.isBlank() || pkg == packageName || pkg == "com.android.systemui" || pkg.contains("inputmethod")) {
+            return
+        }
+
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         ) {
-            val root = rootInActiveWindow
+            val root = event.source ?: rootInActiveWindow
             AccessibilityAutomationEngine.onWindowOrContentChanged(pkg, cls, root)
         } else if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
             event.eventType == AccessibilityEvent.TYPE_VIEW_SELECTED

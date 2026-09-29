@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.FlashOn
@@ -358,6 +359,63 @@ fun HomeScreen(
                         subtitle = "Testar automação",
                         onClick = { onNavigate(Screen.AutomationLab.route) }
                     )
+                }
+            }
+
+            // Bento Grid: Relatório Diário de Atividades & Auditoria Contínua
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(24.dp))
+                        .clickable { onNavigate(Screen.DailyReport.route) }
+                        .testTag("bento_card_daily_report"),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = BentoPrimaryContainer),
+                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(Color(0xFFBFDBFE)))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = "📊", fontSize = 28.sp)
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Relatório Diário de Atividades",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = BentoOnPrimaryContainer
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = BentoPrimary
+                                ) {
+                                    Text(
+                                        text = "AUDITORIA",
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Tempo total em uso no dia, registro contínuo de todas as ações e funções",
+                                fontSize = 12.sp,
+                                color = BentoOnPrimaryContainer.copy(alpha = 0.85f)
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = BentoPrimaryDark,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
 

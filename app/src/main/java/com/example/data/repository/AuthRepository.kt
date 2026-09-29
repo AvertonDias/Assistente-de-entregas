@@ -217,6 +217,10 @@ class FirebaseAuthRepositoryImpl(
             val result = try {
                 credentialManager.getCredential(context = context, request = primaryRequest)
             } catch (primaryErr: Exception) {
+                if (primaryErr is androidx.credentials.exceptions.GetCredentialCancellationException ||
+                    primaryErr is androidx.credentials.exceptions.NoCredentialException) {
+                    throw primaryErr
+                }
                 Log.w("AuthRepository", "Falha com GetSignInWithGoogleOption: ${primaryErr.javaClass.simpleName} - ${primaryErr.message}. Tentando GetGoogleIdOption...")
                 
                 // Fallback com GetGoogleIdOption
@@ -271,18 +275,23 @@ class FirebaseAuthRepositoryImpl(
                 throw Exception("Credencial do Google não reconhecida: tipo=${credential.type}")
             }
         } catch (e: Exception) {
-            Log.e("AuthRepository", "=== ERRO NO GOOGLE SIGN-IN ===", e)
-            Log.e("AuthRepository", "Tipo de Exceção: ${e.javaClass.name}")
-            Log.e("AuthRepository", "Mensagem detalhada: ${e.message}")
-            Log.e("AuthRepository", "Causa raiz: ${e.cause?.message}")
-            
             val className = e.javaClass.simpleName
             val message = e.message ?: ""
+
+            if (e is androidx.credentials.exceptions.GetCredentialCancellationException ||
+                e is androidx.credentials.exceptions.NoCredentialException ||
+                className.contains("Cancellation", ignoreCase = true)) {
+                Log.w("AuthRepository", "Google Sign-In finalizado/cancelado: $className - $message")
+            } else {
+                Log.e("AuthRepository", "=== ERRO NO GOOGLE SIGN-IN ===", e)
+            }
             
-            // Só trata como cancelamento se não houver código de erro do Google e a mensagem for explicitamente de cancelamento manual
-            if ((className.contains("Cancellation", ignoreCase = true) || message.contains("user_cancel", ignoreCase = true)) 
-                && !message.contains("16") && !message.contains("10") && !message.contains("284") && !message.contains("failure", ignoreCase = true)) {
+            if (className.contains("Cancellation", ignoreCase = true) || message.contains("user_cancel", ignoreCase = true)) {
                 return AuthResult.Error("Login cancelado pelo usuário.")
+            }
+
+            if (e is androidx.credentials.exceptions.NoCredentialException || message.contains("No credentials available", ignoreCase = true)) {
+                return AuthResult.Error("Nenhuma conta Google encontrada neste dispositivo. Adicione uma conta Google no Android ou acesse com E-mail e Senha.")
             }
             
             val readableError = getReadableErrorMessage(e)

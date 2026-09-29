@@ -62,6 +62,20 @@ interface PersonDao {
     """)
     fun searchPersonsFast(query: String, limit: Int = 200): Flow<List<Person>>
 
+    @Query("""
+        SELECT * FROM pessoas 
+        WHERE (:query = '' OR 
+               nome LIKE '%' || :query || '%' OR 
+               endereco LIKE '%' || :query || '%' OR 
+               numero LIKE '%' || :query || '%' OR 
+               (endereco || ' ' || numero) LIKE '%' || :query || '%' OR 
+               (endereco || ', ' || numero) LIKE '%' || :query || '%' OR 
+               coRecebedoresJson LIKE '%' || :query || '%')
+        ORDER BY endereco ASC, numero ASC, nome ASC
+        LIMIT :limit OFFSET :offset
+    """)
+    fun searchPersonsPaged(query: String, limit: Int = 50, offset: Int = 0): Flow<List<Person>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPerson(person: Person): Long
 

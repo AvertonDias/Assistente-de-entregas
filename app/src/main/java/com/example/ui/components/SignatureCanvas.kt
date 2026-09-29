@@ -359,14 +359,30 @@ fun SignatureCanvas(
                                 val event = awaitPointerEvent()
                                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                 if (change.pressed) {
-                                    if (change.position != down.position) {
-                                        isDrag = true
+                                    val last = currentStrokePoints.lastOrNull()
+                                    val distSq = if (last != null) {
+                                        val dx = change.position.x - last.x
+                                        val dy = change.position.y - last.y
+                                        dx * dx + dy * dy
+                                    } else Float.MAX_VALUE
+
+                                    // Amostragem inteligente (mínimo de ~2.5 pixels) para evitar pontos redundantes e manter o JSON leve
+                                    if (distSq >= 6f) {
+                                        if (change.position != down.position) {
+                                            isDrag = true
+                                        }
+                                        change.consume()
+                                        currentStrokePoints.add(
+                                            Point(change.position.x, change.position.y, System.currentTimeMillis())
+                                        )
                                     }
-                                    change.consume()
-                                    currentStrokePoints.add(
-                                        Point(change.position.x, change.position.y, System.currentTimeMillis())
-                                    )
                                 } else {
+                                    val last = currentStrokePoints.lastOrNull()
+                                    if (last != null && (last.x != change.position.x || last.y != change.position.y)) {
+                                        currentStrokePoints.add(
+                                            Point(change.position.x, change.position.y, System.currentTimeMillis())
+                                        )
+                                    }
                                     break
                                 }
                             } while (true)

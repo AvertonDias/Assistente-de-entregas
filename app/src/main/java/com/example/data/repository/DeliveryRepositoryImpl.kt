@@ -17,7 +17,17 @@ class DeliveryRepositoryImpl(
     override fun getDeliveriesByPersonId(pessoaId: Long): Flow<List<Delivery>> =
         deliveryDao.getDeliveriesByPersonId(pessoaId)
 
-    override suspend fun insertDelivery(delivery: Delivery): Long = deliveryDao.insertDelivery(delivery)
+    override suspend fun insertDelivery(delivery: Delivery): Long {
+        val id = deliveryDao.insertDelivery(delivery)
+        com.example.util.AppActivityTracker.logAction(
+            actionType = "DELIVERY_SAVED",
+            title = "Entrega Registrada no Histórico",
+            details = "Destinatário: ${delivery.nomeDestinatario.ifBlank { "Não informado" }}\nEndereço: ${delivery.endereco}",
+            category = "Automação",
+            incrementDelivery = true
+        )
+        return id
+    }
 
     override suspend fun insertAll(deliveries: List<Delivery>) = deliveryDao.insertAll(deliveries)
 

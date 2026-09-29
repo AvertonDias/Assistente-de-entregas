@@ -21,6 +21,7 @@ import com.example.util.AddressNormalizer
 import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -56,8 +57,12 @@ data class AutomationState(
     val detectedAddressText: String = "",
     val isAddressLocked: Boolean = false,
     val isPausedScanning: Boolean = false,
+    val isScanning: Boolean = false,
     val matchedPerson: Person? = null,
     val candidatePersons: List<Person> = emptyList(),
+    val allHousePersons: List<Person> = emptyList(),
+    val availableComplements: List<String> = emptyList(),
+    val selectedComplement: String? = null,
     val selectedRecebedor: Recebedor? = null,
     val availableRecebedores: List<Recebedor> = emptyList(),
     val lastAction: String = "Nenhuma",
@@ -72,13 +77,29 @@ object AccessibilityAutomationEngine {
     private var activeService: DeliveryAccessibilityService? = null
     private var personRepository: PersonRepository? = null
     private var settingsRepository: SettingsRepository? = null
-    private var scope: CoroutineScope = CoroutineScope(Dispatchers.Default)
+    private var scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var scanJob: kotlinx.coroutines.Job? = null
     @Volatile private var cachedSettings: com.example.data.repository.AppSettings? = null
     @Volatile private var lastScannedHash: Int = 0
+    @Volatile private var lastScannedCheapHash: Int = 0
+    @Volatile private var lastScanTriggerTime: Long = 0L
+    @Volatile private var isModalActive: Boolean = false
+    @Volatile private var isCurrentlyScanning: Boolean = false
+    @Volatile private var ignoreAccessibilityEventsUntil: Long = 0L
+    @Volatile private var lastLoggedAddress: String = ""
+    @Volatile private var cachedRootNode: AccessibilityNodeInfo? = null
+    @Volatile private var cachedRootPkg: String = ""
+    @Volatile private var cachedRootTimestamp: Long = 0L
 
     private val _state = MutableStateFlow(AutomationState())
     val state = _state.asStateFlow()
+
+    fun setModalActive(active: Boolean) {
+        isModalActive = active
+        if (active) {
+            scanJob?.cancel()
+        }
+    }
 
     fun init(repository: PersonRepository, settingsRepo: SettingsRepository? = null) {
         this.personRepository = repository
@@ -98,6 +119,12 @@ object AccessibilityAutomationEngine {
             isServiceActive = true,
             logs = addLog("Serviço de acessibilidade ativado com sucesso.", true)
         )
+        com.example.util.AppActivityTracker.logAction(
+            actionType = "ACCESSIBILITY_CONNECTED",
+            title = "Serviço de Acessibilidade Ativado",
+            details = "Assistente conectado ao sistema para automação.",
+            category = "Sistema"
+        )
     }
 
     fun unregisterService() {
@@ -105,6 +132,12 @@ object AccessibilityAutomationEngine {
         _state.value = _state.value.copy(
             isServiceActive = false,
             logs = addLog("Serviço de acessibilidade desconectado.", false)
+        )
+        com.example.util.AppActivityTracker.logAction(
+            actionType = "ACCESSIBILITY_DISCONNECTED",
+            title = "Serviço de Acessibilidade Desconectado",
+            details = "Assistente pausado no sistema operacional.",
+            category = "Sistema"
         )
     }
 
@@ -114,7 +147,7 @@ object AccessibilityAutomationEngine {
      * Chamado quando o usuário clica ou seleciona um item na tela (ex: marca um checkbox em 'Seleção' ou clica em uma entrega)
      */
     fun onNodeClickedOrSelected(packageName: String, className: String, node: AccessibilityNodeInfo) {
-        if (_state.value.isPausedScanning) return
+        if (isModalActive || _state.value.isPausedScanning) return
         val myPkg = activeService?.packageName ?: ""
         if (packageName == myPkg) return
 
@@ -146,9 +179,16 @@ object AccessibilityAutomationEngine {
                     val addr = extractBestAddressFromTexts(texts, preferredIdx, allowDepois = true)
                     if (addr.isNotBlank()) {
                         applyDetectedAddress(addr, isUserSelection = true)
+                        if (current != node) {
+                            try { current.recycle() } catch (_: Exception) {}
+                        }
                         return@launch
                     }
-                    current = current.parent
+                    val parent = current.parent
+                    if (current != node) {
+                        try { current.recycle() } catch (_: Exception) {}
+                    }
+                    current = parent
                     depth++
                 }
             } catch (e: Exception) {
@@ -163,7 +203,105 @@ object AccessibilityAutomationEngine {
         return (listOf(newEntry) + current).take(50)
     }
 
+    private fun computeCheapScreenFingerprint(rootNode: AccessibilityNodeInfo?, pkg: String): Int {
+        if (rootNode == null) return 0
+        var hash = 17
+        hash = 31 * hash + pkg.hashCode()
+        hash = 31 * hash + rootNode.childCount
+        hash = 31 * hash + (rootNode.className?.hashCode() ?: 0)
+        hash = 31 * hash + (rootNode.text?.hashCode() ?: 0)
+
+        val count = minOf(rootNode.childCount, 6)
+        for (i in 0 until count) {
+            val child = rootNode.getChild(i) ?: continue
+            hash = 31 * hash + child.childCount
+            hash = 31 * hash + (child.className?.hashCode() ?: 0)
+            hash = 31 * hash + (child.text?.hashCode() ?: 0)
+            try { child.recycle() } catch (_: Exception) {}
+        }
+        return hash
+    }
+
+    private fun getFreshApplicationRoot(service: DeliveryAccessibilityService, preferredPkg: String = ""): Pair<AccessibilityNodeInfo?, String> {
+        val now = System.currentTimeMillis()
+        val cachedNode = cachedRootNode
+        if (cachedNode != null && preferredPkg.isNotBlank() && cachedRootPkg == preferredPkg && (now - cachedRootTimestamp) < 2000L) {
+            try {
+                if (cachedNode.packageName?.toString() == preferredPkg && cachedNode.childCount >= 0) {
+                    return Pair(cachedNode, cachedRootPkg)
+                }
+            } catch (_: Exception) {
+                cachedRootNode = null
+            }
+        }
+
+        var targetRoot: AccessibilityNodeInfo? = null
+        var targetPkg = preferredPkg
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                val windows = service.windows
+                if (!windows.isNullOrEmpty()) {
+                    // 1. Procura primeiro janela com pacote da aplicação de entrega
+                    if (preferredPkg.isNotBlank() && preferredPkg != service.packageName) {
+                        for (window in windows) {
+                            if (window.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) {
+                                val root = window.root ?: continue
+                                val pkg = root.packageName?.toString() ?: ""
+                                if (pkg == preferredPkg) {
+                                    cachedRootNode = root
+                                    cachedRootPkg = pkg
+                                    cachedRootTimestamp = now
+                                    return Pair(root, pkg)
+                                }
+                            }
+                        }
+                    }
+                    // 2. Procura qualquer janela de aplicação de terceiros que não seja nosso próprio app
+                    for (window in windows) {
+                        if (window.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) {
+                            val root = window.root ?: continue
+                            val pkg = root.packageName?.toString() ?: ""
+                            if (pkg.isNotBlank() && pkg != service.packageName) {
+                                targetRoot = root
+                                targetPkg = pkg
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        if (targetRoot == null) {
+            val root = service.rootInActiveWindow
+            if (root != null) {
+                val pkg = root.packageName?.toString() ?: ""
+                targetRoot = root
+                if (targetPkg.isBlank()) targetPkg = pkg
+            }
+        }
+
+        if (targetRoot != null) {
+            cachedRootNode = targetRoot
+            cachedRootPkg = targetPkg
+            cachedRootTimestamp = now
+        }
+
+        return Pair(targetRoot, targetPkg)
+    }
+
     fun onWindowOrContentChanged(packageName: String, className: String, rootNode: AccessibilityNodeInfo?) {
+        if (isModalActive) return
+
+        val now = System.currentTimeMillis()
+        // Ignora eventos gerados por ações recentes da interface (ex: botões, fechamento de modal)
+        if (now < ignoreAccessibilityEventsUntil) {
+            return
+        }
+
         _state.value = _state.value.copy(
             currentPackageName = packageName,
             currentClassName = className
@@ -174,17 +312,40 @@ object AccessibilityAutomationEngine {
             return
         }
 
-        // Se já foi detectado um endereço e está travado nele, não altera automaticamente durante rolagem ou eventos
+        // Se o usuário escolheu ou travou manualmente um morador/endereço, não sobrescreve automaticamente
         if (_state.value.isAddressLocked && _state.value.detectedAddressText.isNotBlank()) {
             return
         }
 
-        if (rootNode != null) {
-            // Cancela varredura anterior se ainda pendente para processar o estado mais recente
-            scanJob?.cancel()
-            scanJob = scope.launch {
-                kotlinx.coroutines.delay(180) // Debounce rapid accessibility events during scrolling/typing
-                scanAndExtractScreenDataInternal(rootNode, packageName)
+        // Se já está no meio de um escaneamento ativo, não cancela nem reinicia para evitar loop contínuo
+        if (isCurrentlyScanning) {
+            return
+        }
+
+        // Debounce consistente de 350ms para permitir que a tela estabilize antes de escanear
+        val debounceMs = 350L
+
+        scanJob?.cancel()
+        scanJob = scope.launch {
+            kotlinx.coroutines.delay(debounceMs)
+            lastScanTriggerTime = System.currentTimeMillis()
+
+            val service = activeService
+            val (freshRoot, freshPkg) = if (service != null) {
+                getFreshApplicationRoot(service, packageName)
+            } else {
+                Pair(null, "")
+            }
+            val targetNode = freshRoot ?: rootNode
+            val targetPkg = if (freshPkg.isNotBlank()) freshPkg else packageName
+
+            if (targetNode != null) {
+                try {
+                    isCurrentlyScanning = true
+                    scanAndExtractScreenDataInternal(targetNode, targetPkg, minDurationMs = 500L)
+                } finally {
+                    isCurrentlyScanning = false
+                }
             }
         }
     }
@@ -192,12 +353,20 @@ object AccessibilityAutomationEngine {
     fun clearDetectedAddress() {
         scanJob?.cancel()
         lastScannedHash = 0
+        lastScannedCheapHash = 0
+        cachedRootNode = null
+        lastLoggedAddress = ""
+        isCurrentlyScanning = false
         _state.value = _state.value.copy(
             detectedAddressText = "",
             isAddressLocked = false,
             isPausedScanning = true,
+            isScanning = false,
             matchedPerson = null,
             candidatePersons = emptyList(),
+            allHousePersons = emptyList(),
+            availableComplements = emptyList(),
+            selectedComplement = null,
             selectedRecebedor = null,
             availableRecebedores = emptyList(),
             logs = addLog("Pesquisa pausada. Clique nas setas para atualizar e buscar novamente.", true)
@@ -207,25 +376,36 @@ object AccessibilityAutomationEngine {
     fun resetAndClearAfterSignature(delayBeforeResumeMs: Long = 5000L) {
         scanJob?.cancel()
         lastScannedHash = 0
+        lastScannedCheapHash = 0
+        cachedRootNode = null
+        lastLoggedAddress = ""
+        isCurrentlyScanning = false
         // Limpa o balão imediatamente e pausa o escaneamento durante o atraso
         _state.value = _state.value.copy(
             detectedAddressText = "",
             isAddressLocked = false,
             isPausedScanning = true,
+            isScanning = false,
             matchedPerson = null,
             candidatePersons = emptyList(),
+            allHousePersons = emptyList(),
+            availableComplements = emptyList(),
+            selectedComplement = null,
             selectedRecebedor = null,
             availableRecebedores = emptyList(),
-            logs = addLog("Assinatura concluída. Balão limpo! Aguardando ${delayBeforeResumeMs / 1000}s para pesquisar o próximo endereço...", true)
+            logs = addLog("Assinatura concluída. Balão limpo! Pronto para pesquisar o próximo endereço...", true)
         )
 
-        // Aguarda os 5 segundos e reativa a detecção/pesquisa
+        // Reativa a detecção/pesquisa após intervalo de 5 segundos
         scope.launch {
             kotlinx.coroutines.delay(delayBeforeResumeMs)
             lastScannedHash = 0
+            lastScannedCheapHash = 0
+            cachedRootNode = null
             _state.value = _state.value.copy(
                 isPausedScanning = false,
                 isAddressLocked = false,
+                isScanning = true,
                 logs = addLog("Detecção ativada. Pronto para escanear a próxima entrega!", true)
             )
             rescanCurrentScreen(forceUnlock = true)
@@ -233,62 +413,47 @@ object AccessibilityAutomationEngine {
     }
 
     fun rescanCurrentScreen(forceUnlock: Boolean = true) {
+        val now = System.currentTimeMillis()
+        // Ignora eventos espúrios nos próximos 800ms para o clique do botão e animações não cancelarem o scan
+        ignoreAccessibilityEventsUntil = now + 800L
         scanJob?.cancel()
+        lastScannedHash = 0
+        lastScannedCheapHash = 0
+        cachedRootNode = null
         _state.value = _state.value.copy(
             isPausedScanning = false,
+            isScanning = true,
             isAddressLocked = if (forceUnlock) false else _state.value.isAddressLocked
         )
-        lastScannedHash = 0
         val service = activeService
-        if (service == null) {
-            _state.value = _state.value.copy(
-                logs = addLog("Reescaneamento falhou: Serviço de acessibilidade inativo.", false)
-            )
-            return
-        }
 
-        var targetRootNode: AccessibilityNodeInfo? = null
-        var targetPkg = _state.value.currentPackageName
-
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                val windows = service.windows
-                if (!windows.isNullOrEmpty()) {
-                    for (window in windows) {
-                        if (window.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) {
-                            val root = window.root
-                            if (root != null) {
-                                val pkg = root.packageName?.toString() ?: ""
-                                if (pkg.isNotBlank() && pkg != service.packageName) {
-                                    targetRootNode = root
-                                    targetPkg = pkg
-                                    break
-                                } else if (targetRootNode == null) {
-                                    targetRootNode = root
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        if (targetRootNode == null) {
-            targetRootNode = service.rootInActiveWindow
-        }
-
-        if (targetRootNode == null) {
-            _state.value = _state.value.copy(
-                logs = addLog("Reescaneamento falhou: Nenhuma janela ativa encontrada.", false)
-            )
-            return
-        }
-
-        scanJob?.cancel()
         scanJob = scope.launch {
-            scanAndExtractScreenDataInternal(targetRootNode, targetPkg)
+            try {
+                isCurrentlyScanning = true
+                if (service == null) {
+                    kotlinx.coroutines.delay(800L)
+                    _state.value = _state.value.copy(
+                        logs = addLog("Acessibilidade inativa. Ative o Assistente nas Configurações de Acessibilidade.", false)
+                    )
+                    return@launch
+                }
+
+                val (targetRootNode, targetPkg) = getFreshApplicationRoot(service, _state.value.currentPackageName)
+                val nodeToScan = targetRootNode ?: service.rootInActiveWindow
+
+                if (nodeToScan == null) {
+                    kotlinx.coroutines.delay(600L)
+                    _state.value = _state.value.copy(
+                        logs = addLog("Nenhuma janela detectada para escanear.", false)
+                    )
+                    return@launch
+                }
+
+                scanAndExtractScreenDataInternal(nodeToScan, targetPkg.ifBlank { nodeToScan.packageName?.toString().orEmpty() }, minDurationMs = 600L)
+            } finally {
+                isCurrentlyScanning = false
+                _state.value = _state.value.copy(isScanning = false)
+            }
         }
     }
 
@@ -298,161 +463,262 @@ object AccessibilityAutomationEngine {
     fun scanAndExtractScreenData(rootNode: AccessibilityNodeInfo, packageName: String) {
         scanJob?.cancel()
         scanJob = scope.launch {
-            scanAndExtractScreenDataInternal(rootNode, packageName)
+            scanAndExtractScreenDataInternal(rootNode, packageName, minDurationMs = 500L)
         }
     }
 
-    private suspend fun scanAndExtractScreenDataInternal(rootNode: AccessibilityNodeInfo, packageName: String) {
-        val settings = cachedSettings ?: try {
-            settingsRepository?.getSettings()?.first()
-        } catch (e: Exception) {
-            null
-        }
+    private suspend fun scanAndExtractScreenDataInternal(
+        rootNode: AccessibilityNodeInfo,
+        packageName: String,
+        minDurationMs: Long = 0L
+    ) {
+        val startTime = System.currentTimeMillis()
+        _state.value = _state.value.copy(isScanning = true)
 
-        val scanMode = settings?.scanTargetMode ?: "NEXT_DELIVERY"
-        var detectedAddress = ""
-
-        val metrics = activeService?.resources?.displayMetrics
-        val screenW = metrics?.widthPixels?.toFloat() ?: 1080f
-        val screenH = metrics?.heightPixels?.toFloat() ?: 1920f
-
-        if (scanMode == "CUSTOM_RECT" || scanMode == "CUSTOM_AREA") {
-            val left = (settings?.scanAreaLeft ?: 0f) * screenW
-            val top = (settings?.scanAreaTop ?: 0f) * screenH
-            val right = (settings?.scanAreaRight ?: 1f) * screenW
-            val bottom = (settings?.scanAreaBottom ?: 1f) * screenH
-
-            val customRectTexts = mutableListOf<String>()
-            collectTextsInRect(rootNode, left, top, right, bottom, customRectTexts, screenW, screenH)
-
-            val uniqueTexts = customRectTexts.distinct().filter { 
-                it.isNotBlank() && 
-                !it.equals("ASSISTENTE", ignoreCase = true) &&
-                !it.startsWith("Próxima", ignoreCase = true)
-            }
-
-            if (uniqueTexts.isNotEmpty()) {
-                detectedAddress = cleanAddressText(uniqueTexts.joinToString(" "))
-            }
+        val cheapHash = computeCheapScreenFingerprint(rootNode, packageName)
+        if (cheapHash != 0 && cheapHash == lastScannedCheapHash) {
+            _state.value = _state.value.copy(isScanning = false)
+            return
         }
 
         val allTexts = mutableListOf<String>()
-        if (detectedAddress.isBlank()) {
-            // 1º Tentar extrair endereço de um item explicitamente marcado/selecionado (ex: checkbox na tela 'Seleção')
-            val checkedAddress = findCheckedOrSelectedAddress(rootNode)
-            if (!checkedAddress.isNullOrBlank()) {
-                detectedAddress = checkedAddress
+        val checkedNodes = mutableListOf<AccessibilityNodeInfo>()
+        try {
+            val settings = cachedSettings ?: try {
+                settingsRepository?.getSettings()?.first()
+            } catch (e: Exception) {
+                null
+            }
+
+            val scanMode = settings?.scanTargetMode ?: "NEXT_DELIVERY"
+            var detectedAddress = ""
+
+            val metrics = activeService?.resources?.displayMetrics
+            val screenW = metrics?.widthPixels?.toFloat() ?: 1080f
+            val screenH = metrics?.heightPixels?.toFloat() ?: 1920f
+
+            if (scanMode == "CUSTOM_RECT" || scanMode == "CUSTOM_AREA") {
+                val left = (settings?.scanAreaLeft ?: 0f) * screenW
+                val top = (settings?.scanAreaTop ?: 0f) * screenH
+                val right = (settings?.scanAreaRight ?: 1f) * screenW
+                val bottom = (settings?.scanAreaBottom ?: 1f) * screenH
+
+                val customRectTexts = mutableListOf<String>()
+                collectTextsInRect(rootNode, left, top, right, bottom, customRectTexts, screenW, screenH)
+
+                val uniqueTexts = customRectTexts.distinct().filter { 
+                    it.isNotBlank() && 
+                    !it.equals("ASSISTENTE", ignoreCase = true) &&
+                    !it.startsWith("Próxima", ignoreCase = true)
+                }
+
+                if (uniqueTexts.isNotEmpty()) {
+                    detectedAddress = cleanAddressText(uniqueTexts.joinToString(" "))
+                }
             }
 
             if (detectedAddress.isBlank()) {
-                collectAllTexts(rootNode, allTexts)
+                collectScreenElements(rootNode, allTexts, checkedNodes)
 
-                if (allTexts.isEmpty()) return
-
-                val currentHash = allTexts.hashCode()
-                if (currentHash == lastScannedHash && _state.value.detectedAddressText.isNotBlank()) {
-                    // Conteúdo inalterado, não repete processamento
-                    return
-                }
-                lastScannedHash = currentHash
-
-                val nextDeliveryIndex = if (scanMode == "NEXT_DELIVERY") {
-                    allTexts.indexOfFirst {
-                        it.contains("Proxima Entrega", ignoreCase = true) ||
-                        it.contains("Próxima Entrega", ignoreCase = true) ||
-                        it.contains("Entrega Atual", ignoreCase = true) ||
-                        it.contains("DETALHES", ignoreCase = true) ||
-                        it.contains("Detalhes", ignoreCase = true) ||
-                        it.contains("Destinatário", ignoreCase = true) ||
-                        it.contains("Destinatario", ignoreCase = true)
+                // 1º Tentar extrair endereço de item marcado/selecionado (ex: checkbox na tela de seleção)
+                if (checkedNodes.isNotEmpty()) {
+                    for (node in checkedNodes) {
+                        val selfText = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim()
+                        if (selfText.isNotBlank()) {
+                            val cleaned = cleanAddressText(selfText)
+                            if (looksLikeAddress(cleaned) || AddressNormalizer.parseAddressComponents(cleaned).number.isNotBlank()) {
+                                detectedAddress = cleaned
+                                break
+                            }
+                        }
+                        // Sobe até o ancestral mais alto (profundidade 3) de uma única vez
+                        var topParent: AccessibilityNodeInfo = node
+                        var parent: AccessibilityNodeInfo? = node.parent
+                        var depth = 0
+                        while (parent != null && depth < 3) {
+                            if (topParent != node) {
+                                try { topParent.recycle() } catch (_: Exception) {}
+                            }
+                            topParent = parent
+                            parent = parent.parent
+                            depth++
+                        }
+                        val containerTexts = mutableListOf<String>()
+                        collectAllTexts(topParent, containerTexts)
+                        if (topParent != node) {
+                            try { topParent.recycle() } catch (_: Exception) {}
+                        }
+                        val preferredIdx = containerTexts.indexOfFirst {
+                            it.contains("DETALHES", ignoreCase = true) ||
+                            it.contains("Detalhes", ignoreCase = true) ||
+                            it.contains("Endereço", ignoreCase = true) ||
+                            it.contains("Endereco", ignoreCase = true) ||
+                            it.contains("Próxima", ignoreCase = true)
+                        }
+                        val addr = extractBestAddressFromTexts(containerTexts, preferredIdx, allowDepois = true)
+                        if (addr.isNotBlank()) {
+                            detectedAddress = addr
+                            break
+                        }
                     }
-                } else -1
+                }
 
-                detectedAddress = extractBestAddressFromTexts(allTexts, nextDeliveryIndex)
+                if (detectedAddress.isBlank()) {
+                    if (allTexts.isEmpty()) {
+                        _state.value = _state.value.copy(isScanning = false)
+                        return
+                    }
+
+                    val currentHash = allTexts.hashCode()
+                    if (currentHash == lastScannedHash) {
+                        lastScannedCheapHash = cheapHash
+                        _state.value = _state.value.copy(isScanning = false)
+                        return
+                    }
+                    lastScannedHash = currentHash
+                    lastScannedCheapHash = cheapHash
+
+                    val nextDeliveryIndex = if (scanMode == "NEXT_DELIVERY") {
+                        allTexts.indexOfFirst {
+                            it.contains("Proxima Entrega", ignoreCase = true) ||
+                            it.contains("Próxima Entrega", ignoreCase = true) ||
+                            it.contains("Entrega Atual", ignoreCase = true) ||
+                            it.contains("DETALHES", ignoreCase = true) ||
+                            it.contains("Detalhes", ignoreCase = true) ||
+                            it.contains("Destinatário", ignoreCase = true) ||
+                            it.contains("Destinatario", ignoreCase = true)
+                        }
+                    } else -1
+
+                    detectedAddress = extractBestAddressFromTexts(allTexts, nextDeliveryIndex)
+                } else {
+                    lastScannedCheapHash = cheapHash
+                }
             }
-        }
 
-        applyDetectedAddress(detectedAddress, isUserSelection = false)
+            if (detectedAddress.isNotBlank()) {
+                applyDetectedAddress(detectedAddress, isUserSelection = false)
+            } else {
+                _state.value = _state.value.copy(isScanning = false)
+            }
+        } finally {
+            for (cn in checkedNodes) {
+                try { cn.recycle() } catch (_: Exception) {}
+            }
+            checkedNodes.clear()
+
+            val elapsed = System.currentTimeMillis() - startTime
+            if (minDurationMs > elapsed) {
+                try {
+                    kotlinx.coroutines.delay(minDurationMs - elapsed)
+                } catch (_: Exception) {}
+            }
+            _state.value = _state.value.copy(isScanning = false)
+        }
     }
 
-    private fun findCheckedOrSelectedAddress(rootNode: AccessibilityNodeInfo): String? {
-        val candidates = mutableListOf<AccessibilityNodeInfo>()
-        collectCheckedOrSelectedNodes(rootNode, candidates)
-        for (node in candidates) {
-            val selfText = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim()
-            if (selfText.isNotBlank()) {
-                val cleaned = cleanAddressText(selfText)
-                if (looksLikeAddress(cleaned) || AddressNormalizer.parseAddressComponents(cleaned).number.isNotBlank()) {
-                    return cleaned
-                }
-            }
-            var current: AccessibilityNodeInfo? = node.parent
-            var depth = 0
-            while (current != null && depth < 4) {
-                val containerTexts = mutableListOf<String>()
-                collectAllTexts(current, containerTexts)
-                val preferredIdx = containerTexts.indexOfFirst {
-                    it.contains("DETALHES", ignoreCase = true) ||
-                    it.contains("Detalhes", ignoreCase = true) ||
-                    it.contains("Endereço", ignoreCase = true) ||
-                    it.contains("Endereco", ignoreCase = true) ||
-                    it.contains("Próxima", ignoreCase = true)
-                }
-                val addr = extractBestAddressFromTexts(containerTexts, preferredIdx, allowDepois = true)
-                if (addr.isNotBlank()) {
-                    return addr
-                }
-                current = current.parent
-                depth++
-            }
-        }
-        return null
-    }
-
-    private fun collectCheckedOrSelectedNodes(node: AccessibilityNodeInfo?, list: MutableList<AccessibilityNodeInfo>) {
+    private fun collectScreenElements(
+        node: AccessibilityNodeInfo?,
+        allTexts: MutableList<String>,
+        checkedNodes: MutableList<AccessibilityNodeInfo>
+    ) {
         if (node == null) return
-        if (node.isChecked || node.isSelected) {
-            list.add(node)
-        }
-        val childCount = node.childCount
-        for (i in 0 until childCount) {
-            val child = node.getChild(i) ?: continue
-            collectCheckedOrSelectedNodes(child, list)
-            try {
-                if (!child.isChecked && !child.isSelected) {
-                    child.recycle()
+        try {
+            val nodePkg = node.packageName?.toString() ?: ""
+            val myPkg = activeService?.packageName ?: ""
+            if (nodePkg.isNotBlank() && myPkg.isNotBlank() && nodePkg == myPkg) {
+                return
+            }
+
+            if (node.isChecked || node.isSelected) {
+                checkedNodes.add(node)
+            }
+            val text = node.text?.toString()?.trim()
+            if (!text.isNullOrBlank() && text.any { it.isLetterOrDigit() }) {
+                allTexts.add(text)
+            }
+            val desc = node.contentDescription?.toString()?.trim()
+            if (!desc.isNullOrBlank() && desc != text && desc.any { it.isLetterOrDigit() }) {
+                allTexts.add(desc)
+            }
+            val childCount = node.childCount
+            for (i in 0 until childCount) {
+                val child = node.getChild(i) ?: continue
+                collectScreenElements(child, allTexts, checkedNodes)
+                if (!checkedNodes.contains(child)) {
+                    try { child.recycle() } catch (_: Exception) {}
                 }
-            } catch (_: Exception) {}
-        }
+            }
+        } catch (_: Exception) {}
     }
 
     private suspend fun applyDetectedAddress(detectedAddress: String, isUserSelection: Boolean = false) {
         if (detectedAddress.isBlank()) return
 
         val repo = personRepository
-        val matched = if (repo != null) {
+        val rawMatched = if (repo != null) {
             repo.findPersonsByAddress(detectedAddress)
         } else {
             emptyList()
         }
 
-        // Se o endereço detectado na tela não tiver o número, mas o registro cadastrado tiver, complementa com o número
-        val finalDetectedAddress = if (matched.isNotEmpty()) {
-            val firstMatched = matched.first()
-            val parsedDetected = AddressNormalizer.parseAddressComponents(detectedAddress)
-            if (parsedDetected.number.isBlank() && firstMatched.numero.isNotBlank()) {
-                val base = parsedDetected.street.ifBlank { detectedAddress }
-                if (firstMatched.complemento.isNotBlank()) {
-                    "$base, ${firstMatched.numero} - ${firstMatched.complemento}"
-                } else {
-                    "$base, ${firstMatched.numero}"
-                }
-            } else {
-                detectedAddress
+        val parsedDetected = AddressNormalizer.parseAddressComponents(detectedAddress)
+        val allNumbers = AddressNormalizer.extractNumbers(detectedAddress)
+        val hasDetectedNumber = parsedDetected.number.isNotBlank() || allNumbers.isNotEmpty()
+        val detectedNumber = parsedDetected.number.ifBlank { allNumbers.firstOrNull() ?: "" }
+
+        // Se o endereço detectado na tela possui número específico, NUNCA trazer pessoas de outros números!
+        val numberMatched = if (hasDetectedNumber && detectedNumber.isNotBlank()) {
+            rawMatched.filter { p ->
+                val pNum = p.numero.trim()
+                val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
+                val targetNum = pNum.ifBlank { parsedP.number }
+                targetNum.isNotBlank() && AddressNormalizer.areNumbersMatching(detectedNumber, targetNum)
             }
         } else {
-            detectedAddress
+            // Se o endereço na tela não tem número mas temos candidatos cadastrados:
+            // Só considera match direto se todos os candidatos pertencerem à mesma casa/número
+            val distinctNumbers = rawMatched.map { it.numero.trim() }.filter { it.isNotBlank() }.distinct()
+            if (distinctNumbers.size <= 1) {
+                rawMatched
+            } else {
+                // Múltiplos números diferentes cadastrados na rua:
+                // Não assume nenhum como correspondente automático para não misturar moradores de casas diferentes
+                emptyList()
+            }
         }
+
+        val distinctComplements = numberMatched
+            .map { it.complemento.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+
+        // Se o endereço detectado possui complemento explícito (ex: Casa 1, Apto 102),
+        // filtra preferencialmente os moradores daquele complemento específico.
+        val detectedComp = parsedDetected.complement.trim()
+        val activeComplement = if (detectedComp.isNotBlank()) {
+            detectedComp
+        } else {
+            distinctComplements.firstOrNull()
+        }
+
+        val matched = if (activeComplement != null && activeComplement.isNotBlank()) {
+            val compFiltered = numberMatched.filter { p ->
+                val pComp = p.complemento.trim()
+                val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
+                val targetComp = pComp.ifBlank { parsedP.complement }
+                targetComp.isNotBlank() && (
+                    AddressNormalizer.normalize(targetComp) == AddressNormalizer.normalize(activeComplement) ||
+                    (AddressNormalizer.extractComplement(targetComp).isNotBlank() &&
+                     AddressNormalizer.extractComplement(targetComp) == AddressNormalizer.extractComplement(activeComplement))
+                )
+            }
+            if (compFiltered.isNotEmpty()) compFiltered else numberMatched
+        } else {
+            numberMatched
+        }
+
+        val finalDetectedAddress = detectedAddress
 
         val recebedores = extractAllRecebedores(matched)
         val selectionTag = if (isUserSelection) "[SELECIONADO] " else ""
@@ -466,12 +732,27 @@ object AccessibilityAutomationEngine {
             "Reescaneamento concluído: Nenhum endereço encontrado."
         }
 
-        val isLocked = finalDetectedAddress.isNotBlank()
+        val isLocked = if (finalDetectedAddress.isNotBlank()) true else isUserSelection
+        if (finalDetectedAddress.isNotBlank() && finalDetectedAddress != lastLoggedAddress) {
+            lastLoggedAddress = finalDetectedAddress
+            val personFound = matched.firstOrNull()?.nome ?: "Sem cadastro prévio"
+            com.example.util.AppActivityTracker.logAction(
+                actionType = "ADDRESS_DETECTED",
+                title = "Endereço Detectado na Tela",
+                details = "$finalDetectedAddress\nDestinatário associado: $personFound",
+                category = "Automação",
+                incrementAddress = true
+            )
+        }
+
         _state.value = _state.value.copy(
             detectedAddressText = finalDetectedAddress,
             isAddressLocked = isLocked,
             matchedPerson = matched.firstOrNull(),
             candidatePersons = matched,
+            allHousePersons = numberMatched,
+            availableComplements = distinctComplements,
+            selectedComplement = activeComplement,
             availableRecebedores = recebedores,
             selectedRecebedor = recebedores.firstOrNull(),
             logs = addLog(logMessage, matched.isNotEmpty())
@@ -515,14 +796,12 @@ object AccessibilityAutomationEngine {
         for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
             collectTextsInRect(child, rectLeft, rectTop, rectRight, rectBottom, list, screenW, screenH)
-            try {
-                child.recycle()
-            } catch (_: Exception) {}
+            try { child.recycle() } catch (_: Exception) {}
         }
     }
 
     private fun cleanAddressText(text: String): String {
-        val extracted = AddressNormalizer.extractStreetAndNumber(text)
+        val extracted = AddressNormalizer.extractCleanAddress(text)
         if (extracted.isNotBlank()) {
             return extracted
         }
@@ -546,9 +825,7 @@ object AccessibilityAutomationEngine {
         for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
             collectAllTexts(child, list)
-            try {
-                child.recycle()
-            } catch (_: Exception) {}
+            try { child.recycle() } catch (_: Exception) {}
         }
     }
 
@@ -701,7 +978,10 @@ object AccessibilityAutomationEngine {
             "PRAÇA", "PRACA", "PCA.", "TRAVESSA", "TV.", "RODOVIA", "ROD.", "ESTRADA", "EST.",
             "BECO", "VIELA", "LOTEAMENTO", "LOT.", "RESIDENCIAL", "RES.", "CONDOMINIO", "CONDOMÍNIO",
             "JD", "JARDIM", "VL", "VILA", "BAIRRO", "CENTRO", "Nº", "N°", "NUMERO", "NUM.", "KM",
-            "SEM BAIRRO", "SEM_BAIRRO"
+            "SEM BAIRRO", "SEM_BAIRRO",
+            " DE JANEIRO", " DE FEVEREIRO", " DE MARCO", " DE MARÇO", " DE ABRIL", " DE MAIO",
+            " DE JUNHO", " DE JULHO", " DE AGOSTO", " DE SETEMBRO", " DE OUTUBRO", " DE NOVEMBRO", " DE DEZEMBRO",
+            "XV DE", "15 DE", "7 DE", "13 DE", "21 DE", "24 DE", "1º DE", "1 DE", "9 DE", "31 DE", "25 DE", "14 DE", "28 DE"
         )
         val hasTrigger = triggers.any { upper.contains(it) }
         val hasDigits = text.any { it.isDigit() }
@@ -794,6 +1074,16 @@ object AccessibilityAutomationEngine {
             }
 
             val isSuccess = nameFilled || docFilled
+            if (isSuccess) {
+                com.example.util.AppActivityTracker.logAction(
+                    actionType = "AUTOFILL_EXECUTED",
+                    title = "Preenchimento Automático nos Campos",
+                    details = "Destinatário: $name | Doc: ${if (document.isNotBlank()) document else "Não informado"}",
+                    category = "Automação",
+                    incrementDelivery = true
+                )
+            }
+
             _state.value = _state.value.copy(
                 lastAction = "Preenchimento de formulário",
                 lastActionResult = isSuccess,
@@ -1274,15 +1564,143 @@ object AccessibilityAutomationEngine {
             val selected = recebedores.firstOrNull { it.id == "p_${person.id}_main" }
                 ?: recebedores.firstOrNull { it.id.startsWith("p_${person.id}") }
                 ?: recebedores.firstOrNull()
+            val distinctComps = matched.map { it.complemento.trim() }.filter { it.isNotBlank() }.distinct()
             _state.value = _state.value.copy(
                 detectedAddressText = addressToSet,
                 isAddressLocked = true,
                 matchedPerson = person,
                 candidatePersons = matched,
+                allHousePersons = matched,
+                availableComplements = distinctComps,
+                selectedComplement = person.complemento.trim().ifBlank { distinctComps.firstOrNull() },
                 availableRecebedores = recebedores,
                 selectedRecebedor = selected,
                 logs = addLog("Destinatário selecionado manualmente: ${person.nome} (${addressToSet.ifBlank { "Sem endereço" }})", true)
             )
+        }
+    }
+
+    fun selectComplement(complement: String) {
+        val all = _state.value.allHousePersons
+        val filtered = if (complement.isBlank()) {
+            all
+        } else {
+            all.filter { p ->
+                val pComp = p.complemento.trim()
+                val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
+                val targetComp = pComp.ifBlank { parsedP.complement }
+                targetComp.isNotBlank() && (
+                    AddressNormalizer.normalize(targetComp) == AddressNormalizer.normalize(complement) ||
+                    (AddressNormalizer.extractComplement(targetComp).isNotBlank() &&
+                     AddressNormalizer.extractComplement(targetComp) == AddressNormalizer.extractComplement(complement))
+                )
+            }
+        }
+        val recebedores = extractAllRecebedores(filtered)
+        _state.value = _state.value.copy(
+            selectedComplement = complement,
+            candidatePersons = filtered,
+            matchedPerson = filtered.firstOrNull(),
+            availableRecebedores = recebedores,
+            selectedRecebedor = recebedores.firstOrNull(),
+            logs = addLog("Complemento selecionado: $complement", filtered.isNotEmpty())
+        )
+    }
+
+    fun setComplementForDetectedAddress(newComplement: String) {
+        val currentAddress = _state.value.detectedAddressText
+        if (currentAddress.isBlank()) return
+        val parsed = AddressNormalizer.parseAddressComponents(currentAddress)
+        val baseStreet = parsed.street
+        val baseNum = parsed.number
+        val baseNeighborhood = parsed.neighborhood
+        val cleanComp = AddressNormalizer.formatComplementToken(newComplement.trim()).ifBlank { newComplement.trim() }
+
+        val newAddress = buildString {
+            if (baseStreet.isNotBlank()) append(baseStreet)
+            if (baseNum.isNotBlank()) {
+                if (isNotEmpty()) append(", ")
+                append(baseNum)
+            }
+            if (cleanComp.isNotBlank()) {
+                if (isNotEmpty()) append(" ")
+                append(cleanComp)
+            }
+            if (baseNeighborhood.isNotBlank()) {
+                if (isNotEmpty()) append(" - ")
+                append(baseNeighborhood)
+            }
+        }
+
+        scope.launch {
+            val repo = personRepository
+            val rawMatched = if (repo != null) {
+                repo.findPersonsByAddress(newAddress)
+            } else {
+                emptyList()
+            }
+
+            // Filtro estrito de número
+            val numberMatched = if (baseNum.isNotBlank()) {
+                rawMatched.filter { p ->
+                    val pNum = p.numero.trim()
+                    val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
+                    val targetNum = pNum.ifBlank { parsedP.number }
+                    targetNum.isNotBlank() && AddressNormalizer.areNumbersMatching(baseNum, targetNum)
+                }
+            } else {
+                rawMatched
+            }
+
+            // Extrair todos os complementos disponíveis para a casa/número
+            val distinctComplements = numberMatched
+                .map { it.complemento.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+
+            // Filtro preferencial por complemento
+            val compFiltered = if (cleanComp.isNotBlank()) {
+                numberMatched.filter { p ->
+                    val pComp = p.complemento.trim()
+                    val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
+                    val targetComp = pComp.ifBlank { parsedP.complement }
+                    targetComp.isNotBlank() && (
+                        AddressNormalizer.normalize(targetComp) == AddressNormalizer.normalize(cleanComp) ||
+                        AddressNormalizer.normalize(targetComp).contains(AddressNormalizer.normalize(cleanComp)) ||
+                        AddressNormalizer.normalize(cleanComp).contains(AddressNormalizer.normalize(targetComp)) ||
+                        (AddressNormalizer.extractComplement(targetComp).isNotBlank() &&
+                         AddressNormalizer.extractComplement(targetComp) == AddressNormalizer.extractComplement(cleanComp))
+                    )
+                }
+            } else {
+                numberMatched
+            }
+
+            val matched = if (compFiltered.isNotEmpty()) compFiltered else numberMatched
+            val recebedores = extractAllRecebedores(matched)
+
+            _state.value = _state.value.copy(
+                detectedAddressText = newAddress,
+                isAddressLocked = true,
+                matchedPerson = matched.firstOrNull(),
+                candidatePersons = matched,
+                allHousePersons = numberMatched,
+                availableComplements = if (cleanComp.isNotBlank() && !distinctComplements.contains(cleanComp)) listOf(cleanComp) + distinctComplements else distinctComplements,
+                selectedComplement = cleanComp.ifBlank { distinctComplements.firstOrNull() },
+                availableRecebedores = recebedores,
+                selectedRecebedor = recebedores.firstOrNull(),
+                logs = addLog("[COMPLEMENTO] $newAddress", matched.isNotEmpty())
+            )
+
+            val service = activeService
+            if (service != null) {
+                withContext(Dispatchers.Main) {
+                    try {
+                        val status = if (matched.isNotEmpty()) "Destinatário encontrado!" else "Endereço pronto para salvar"
+                        Toast.makeText(service, "✓ $newAddress\n$status", Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {}
+                }
+            }
         }
     }
 
@@ -1308,6 +1726,15 @@ object AccessibilityAutomationEngine {
                     matched.isNotEmpty()
                 )
             )
+        }
+    }
+
+    fun refreshCurrentAddress() {
+        val current = _state.value.detectedAddressText.trim()
+        if (current.isNotBlank()) {
+            scope.launch {
+                applyDetectedAddress(current, isUserSelection = false)
+            }
         }
     }
 }

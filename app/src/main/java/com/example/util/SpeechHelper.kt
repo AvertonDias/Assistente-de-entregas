@@ -79,10 +79,10 @@ object SpeechHelper {
             "oitocentos" to "800", "novecentos" to "900", "mil" to "1000"
         )
 
-        // Se já tiver dígitos, pega os dígitos e letras anexadas (ex: 123A, 45B)
+        // Se já tiver dígitos, pega os dígitos e letras anexadas (ex: 123A, 45B, 1.843 -> 1843)
         val directDigits = text.filter { it.isDigit() }
         if (directDigits.isNotEmpty()) {
-            return text.replace(" ", "").uppercase(Locale.getDefault())
+            return text.replace(" ", "").replace(".", "").uppercase(Locale.getDefault())
         }
 
         // Tenta substituir palavras por dígitos se falou dígito a dígito
@@ -92,7 +92,7 @@ object SpeechHelper {
         }
         val resultingDigits = converted.filter { it.isDigit() }
         if (resultingDigits.isNotEmpty()) {
-            return resultingDigits
+            return converted.replace(" ", "").replace(".", "").uppercase(Locale.getDefault())
         }
 
         return AddressNormalizer.capitalizeWords(text.trim())

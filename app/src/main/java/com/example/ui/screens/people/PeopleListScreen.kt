@@ -52,7 +52,9 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -102,6 +104,32 @@ fun PeopleListScreen(
     var personToDelete by remember { mutableStateOf<Person?>(null) }
     var receiverToDelete by remember { mutableStateOf<ReceiverDeleteTarget?>(null) }
     var filterOnlyMultipleReceivers by remember { mutableStateOf(false) }
+
+    var searchInputText by remember(searchQuery) { mutableStateOf(searchQuery) }
+    var searchStartTime by remember { mutableStateOf(0L) }
+
+    val performSearchAction = { query: String ->
+        val trimmed = query.trim()
+        val durationMs = if (searchStartTime > 0L) {
+            System.currentTimeMillis() - searchStartTime
+        } else 500L
+        searchStartTime = 0L
+
+        viewModel.onSearchQueryChanged(trimmed)
+
+        if (trimmed.isNotBlank()) {
+            try {
+                com.example.util.AppActivityTracker.logAction(
+                    actionType = "MANUAL_PERSON_SEARCH",
+                    title = "Busca Manual Realizada",
+                    details = "Termo pesquisado: \"$trimmed\"",
+                    category = "Cadastros",
+                    durationMs = durationMs,
+                    incrementSearch = true
+                )
+            } catch (_: Throwable) {}
+        }
+    }
 
     fun hasMultipleReceivers(person: Person): Boolean {
         if (person.coRecebedoresJson.isNotBlank()) {
@@ -175,14 +203,30 @@ fun PeopleListScreen(
                         .padding(start = if (isWideScreen) 24.dp else 16.dp, end = if (isWideScreen) 24.dp else 16.dp, top = 12.dp, bottom = 6.dp)
                 ) {
                     OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { viewModel.onSearchQueryChanged(it) },
+                        value = searchInputText,
+                        onValueChange = {
+                            if (searchStartTime == 0L) {
+                                searchStartTime = System.currentTimeMillis()
+                            }
+                            searchInputText = it
+                        },
                         placeholder = { Text("Pesquisar por rua, número da rua ou nome...") },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        leadingIcon = {
+                            IconButton(
+                                onClick = { performSearchAction(searchInputText) },
+                                modifier = Modifier.testTag("people_search_submit_button")
+                            ) {
+                                Icon(Icons.Default.Search, contentDescription = "Pesquisar")
+                            }
+                        },
                         trailingIcon = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (searchQuery.isNotBlank()) {
-                                    IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
+                                if (searchInputText.isNotBlank()) {
+                                    IconButton(onClick = {
+                                        searchInputText = ""
+                                        searchStartTime = 0L
+                                        viewModel.onSearchQueryChanged("")
+                                    }) {
                                         Icon(Icons.Default.Clear, contentDescription = "Limpar busca")
                                     }
                                 }
@@ -191,12 +235,17 @@ fun PeopleListScreen(
                                     onResult = { spoken ->
                                         val clean = SpeechHelper.processSpokenSearch(spoken)
                                         if (clean.isNotBlank()) {
-                                            viewModel.onSearchQueryChanged(clean)
+                                            searchInputText = clean
+                                            performSearchAction(clean)
                                         }
                                     }
                                 )
                             }
                         },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = {
+                            performSearchAction(searchInputText)
+                        }),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("search_people_input"),

@@ -16,6 +16,8 @@ import com.example.data.repository.SettingsRepository
 import com.example.data.repository.SettingsRepositoryImpl
 import com.example.data.repository.SignatureRepository
 import com.example.data.repository.SignatureRepositoryImpl
+import com.example.data.repository.ActivityReportRepository
+import com.example.data.repository.ActivityReportRepositoryImpl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,10 +29,13 @@ class DeliveryApp : Application() {
 
     val database by lazy { AppDatabase.getDatabase(this, applicationScope) }
     val authRepository: AuthRepository by lazy { FirebaseAuthRepositoryImpl(this) }
-    val personRepository: PersonRepository by lazy { PersonRepositoryImpl(database.personDao()) }
+    val personRepository: PersonRepository by lazy { PersonRepositoryImpl(database.personDao(), applicationScope) }
     val deliveryRepository: DeliveryRepository by lazy { DeliveryRepositoryImpl(database.deliveryDao()) }
     val signatureRepository: SignatureRepository by lazy { SignatureRepositoryImpl(database.personDao(), database.deliveryDao()) }
     val settingsRepository: SettingsRepository by lazy { SettingsRepositoryImpl(this, database.personDao(), database.deliveryDao()) }
+    val activityReportRepository: ActivityReportRepository by lazy {
+        ActivityReportRepositoryImpl(database.activityReportDao(), applicationScope)
+    }
     val firebaseSyncRepository: FirebaseSyncRepository by lazy {
         FirebaseSyncRepositoryImpl(this, database.personDao(), database.deliveryDao())
     }
@@ -75,6 +80,7 @@ class DeliveryApp : Application() {
             }
         }
         com.example.util.CrashReporter.init(this)
+        com.example.util.AppActivityTracker.init(this, activityReportRepository)
 
         applicationScope.launch(Dispatchers.IO) {
             try {

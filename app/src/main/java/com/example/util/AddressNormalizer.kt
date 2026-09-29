@@ -64,8 +64,68 @@ object AddressNormalizer {
     private val REGEX_QUADRA_REPLACE = Regex("""(?i)^(quadra|qd)\.?\s*""")
     private val REGEX_LOTE_REPLACE = Regex("""(?i)^(lote|lt)\.?\s*""")
 
+    private val REGEX_CLEAN_ABALHADORES = Regex("""(?i)\b(?:torre\s+)?abalhadores\b""")
+    private val REGEX_P1_IS_PURE_NUMBER = Regex("""(?i)^\s*(?:nº|n°|n\.|numero|num)?\s*(?:\d{1,3}(?:\.\d{3})+[A-Za-z]?|\d+[A-Za-z]?|s/n|sn)\s*$""")
+    private val REGEX_LEADING_NUM_MATCH = Regex("""(?i)^\s*(?:nº|n°|n\.|numero|num)?\s*(\b\d{1,3}(?:\.\d{3})+[A-Za-z]?\b|\b\d+[A-Za-z]?\b|S/N|SN)\b""")
+    private val REGEX_EXPLICIT_PREFIX_NUM = Regex("""(?i)\b(?:nº|n°|n\.|numero|num)\s*(\d{1,3}(?:\.\d{3})+[A-Za-z]?|\d+[A-Za-z]?(?:-[A-Za-z0-9]+)?)\b""")
+    private val REGEX_COMMA_NUM = Regex("""(?i)[,\-]\s*(?:nº|n°|n\.|numero|num)?\s*(\d{1,3}(?:\.\d{3})+[A-Za-z]?|\d+[A-Za-z]?(?:-[A-Za-z0-9]+)?)\b""")
+    private val REGEX_SN_MATCH = Regex("""(?i)\b(?:s/n|sn|sem\s+n[uú]mero)\b""")
+    private val REGEX_DIGIT_DOT_DASH = Regex("""(?<=\d)[.\-_](?=\d)""")
+    private val REGEX_RUA_X = Regex("""(?i)\b(RUA|AV|AVENIDA|TRAVESSA|ALAMEDA|SETOR|QUADRA|BLOCO)\s+X\b""")
+    private val REGEX_RUA_V = Regex("""(?i)\b(RUA|AV|AVENIDA|TRAVESSA|ALAMEDA|SETOR|QUADRA|BLOCO)\s+V\b""")
+    private val REGEX_PEDRO_I = Regex("""(?i)\b(PEDRO|DOM PEDRO|D PEDRO)\s+I\b""")
+    private val REGEX_PEDRO_II = Regex("""(?i)\b(PEDRO|DOM PEDRO|D PEDRO)\s+II\b""")
+    private val REGEX_ORDINAL_DIGITS = Regex("""\b(\d+)[ºª°]\b""")
+
     private val COMPLEMENT_PATTERN = Regex(
         """(?i)\b(?:(apartamento|apto|apt|ap)\.?\s*(\d+[A-Za-z]?|[A-Za-z]\b)|(bloco|blo|bl)\.?\s+([0-9A-Za-z]{1,4})|(torre|tor)\.?\s+([0-9A-Za-z]{1,4}|norte|sul|leste|oeste)|(casa|cs)\.?\s*(\d+[A-Za-z]?|[A-Za-z]\b)|(sala|sl)\.?\s*(\d+[A-Za-z]?|[A-Za-z]\b)|(conjunto|conj|cj)\.?\s*(\d+[A-Za-z]?|[A-Za-z]\b)|(quadra|qd)\.?\s*([0-9A-Za-z]{1,4})|(lote|lt)\.?\s*([0-9A-Za-z]{1,4})|(andar|pavimento|pav)\.?\s*(\d{1,3}[ºª]?|[0-9A-Za-z]{1,3})|(fundos|fds|frente|sobrado|térreo|terreo|galpão|galpao|subsolo))\b"""
+    )
+
+    // Mapeamento de numerais romanos comuns em logradouros brasileiros (ex: "XV de Julho", "VII de Setembro", "Rua XV")
+    private val ROMAN_NUMERALS_MAP = linkedMapOf(
+        "XXXI" to "31", "XXX" to "30", "XXIX" to "29", "XXVIII" to "28", "XXVII" to "27",
+        "XXVI" to "26", "XXV" to "25", "XXIV" to "24", "XXIII" to "23", "XXII" to "22",
+        "XXI" to "21", "XX" to "20", "XIX" to "19", "XVIII" to "18", "XVII" to "17",
+        "XVI" to "16", "XV" to "15", "XIV" to "14", "XIII" to "13", "XII" to "12",
+        "XI" to "11", "X" to "10", "IX" to "9", "VIII" to "8", "VII" to "7", "VI" to "6",
+        "V" to "5", "IV" to "4", "III" to "3", "II" to "2", "I" to "1"
+    )
+
+    // Mapeamento de números por extenso ou ordinais em datas de logradouros (ex: "Quinze de Julho", "Primeiro de Maio")
+    private val WRITTEN_DATE_NUMBERS_MAP = linkedMapOf(
+        "TRINTA E UM" to "31", "TRINTA" to "30", "VINTE E NOVE" to "29", "VINTE E OITO" to "28",
+        "VINTE E SETE" to "27", "VINTE E SEIS" to "26", "VINTE E CINCO" to "25", "VINTE E QUATRO" to "24",
+        "VINTE E TRES" to "23", "VINTE E TRÊS" to "23", "VINTE E DOIS" to "22", "VINTE E UM" to "21",
+        "VINTE" to "20", "DEZENOVE" to "19", "DEZOITO" to "18", "DEZESSETE" to "17",
+        "DEZESSEIS" to "16", "QUINZE" to "15", "QUATORZE" to "14", "CATORZE" to "14",
+        "TREZE" to "13", "DOZE" to "12", "ONZE" to "11", "DEZ" to "10",
+        "NOVE" to "9", "OITO" to "8", "SETE" to "7", "SEIS" to "6",
+        "CINCO" to "5", "QUATRO" to "4", "TRES" to "3", "TRÊS" to "3",
+        "DOIS" to "2", "PRIMEIRO" to "1", "1º" to "1", "1°" to "1", "1O" to "1", "1A" to "1"
+    )
+
+    private val PRECOMPILED_WRITTEN_DATE_PATTERNS: List<Pair<Regex, String>> by lazy {
+        WRITTEN_DATE_NUMBERS_MAP.map { (word, num) ->
+            val normWord = REGEX_DIACRITICS.replace(Normalizer.normalize(word, Normalizer.Form.NFD), "").uppercase(Locale.ROOT)
+            Regex("""(?i)\b""" + Regex.escape(normWord) + """\s+DE\s+(JANEIRO|FEVEREIRO|MARCO|ABRIL|MAIO|JUNHO|JULHO|AGOSTO|SETEMBRO|OUTUBRO|NOVEMBRO|DEZEMBRO)\b""") to "$num DE $1"
+        }
+    }
+
+    private val PRECOMPILED_ROMAN_DATE_PATTERNS: List<Pair<Regex, String>> by lazy {
+        ROMAN_NUMERALS_MAP.map { (roman, num) ->
+            Regex("""(?i)\b""" + Regex.escape(roman) + """\s+DE\s+(JANEIRO|FEVEREIRO|MARCO|ABRIL|MAIO|JUNHO|JULHO|AGOSTO|SETEMBRO|OUTUBRO|NOVEMBRO|DEZEMBRO)\b""") to "$num DE $1"
+        }
+    }
+
+    private val PRECOMPILED_ROMAN_ISOLATED_PATTERNS: List<Pair<Regex, String>> by lazy {
+        ROMAN_NUMERALS_MAP.filter { it.key.length >= 2 }.map { (roman, num) ->
+            Regex("""\b""" + Regex.escape(roman) + """\b""") to num
+        }
+    }
+
+    // Regex para identificar datas de logradouros: "15 de Julho", "XV de Novembro", "7 de Setembro", etc.
+    private val REGEX_DATE_IN_STREET = Regex(
+        """(?i)\b(\d{1,2}|1º|1°|[0-9]+)\s+de\s+(?:janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b"""
     )
 
     fun normalizeNumber(num: String?): String {
@@ -122,6 +182,23 @@ object AddressNormalizer {
 
     fun formatComplementToken(token: String): String {
         val t = token.trim()
+        if (t.isBlank()) return ""
+
+        // Se contiver múltiplos complementos (ex: "Bloco B Apto 101" ou "Casa 2 Fundos"), formata cada um
+        val matches = COMPLEMENT_PATTERN.findAll(t).toList()
+        if (matches.size > 1) {
+            val parts = matches.map { formatSingleComplementToken(it.value.trim()) }.filter { it.isNotBlank() }
+            if (parts.isNotEmpty()) {
+                return parts.joinToString(" ")
+            }
+        }
+
+        return formatSingleComplementToken(t)
+    }
+
+    private fun formatSingleComplementToken(token: String): String {
+        val t = token.trim()
+        if (t.isBlank()) return ""
         val lower = t.lowercase(Locale.ROOT)
         return when {
             lower.startsWith("ap") || lower.startsWith("apt") -> {
@@ -144,6 +221,10 @@ object AddressNormalizer {
                 val num = REGEX_SALA_REPLACE.replace(t, "").trim()
                 if (num.isNotBlank()) "Sala $num" else "Sala"
             }
+            lower.startsWith("cj") || lower.startsWith("conj") || lower.startsWith("conjunto") -> {
+                val num = Regex("""(?i)^(conjunto|conj|cj)\.?\s*""").replace(t, "").trim()
+                if (num.isNotBlank()) "Conj $num" else "Conjunto"
+            }
             lower.startsWith("qd") || lower.startsWith("quadra") -> {
                 val num = REGEX_QUADRA_REPLACE.replace(t, "").trim()
                 if (num.isNotBlank()) "Qd $num" else "Quadra"
@@ -152,10 +233,16 @@ object AddressNormalizer {
                 val num = REGEX_LOTE_REPLACE.replace(t, "").trim()
                 if (num.isNotBlank()) "Lt $num" else "Lote"
             }
+            lower.startsWith("andar") || lower.startsWith("pav") || lower.startsWith("pavimento") -> {
+                val num = Regex("""(?i)^(andar|pavimento|pav)\.?\s*""").replace(t, "").trim()
+                if (num.isNotBlank()) "$num Andar" else "Andar"
+            }
             lower.startsWith("fds") || lower == "fundos" -> "Fundos"
             lower == "frente" -> "Frente"
             lower == "sobrado" -> "Sobrado"
             lower.startsWith("terreo") || lower.startsWith("térreo") -> "Térreo"
+            lower.startsWith("galp") || lower.startsWith("galpao") || lower.startsWith("galpão") -> "Galpão"
+            lower.startsWith("subsolo") -> "Subsolo"
             else -> capitalizeWords(t)
         }
     }
@@ -201,7 +288,7 @@ object AddressNormalizer {
         var explicitBairro = rawNeighborhood.trim()
 
         if (explicitComplement.contains("ABALHADORES", ignoreCase = true)) {
-            explicitComplement = explicitComplement.replace(Regex("""(?i)\b(?:torre\s+)?abalhadores\b"""), "").trim()
+            explicitComplement = REGEX_CLEAN_ABALHADORES.replace(explicitComplement, "").trim()
         }
         if (text.equals("Rua dos", ignoreCase = true) || text.equals("Trabalhadores", ignoreCase = true)) {
             text = "Rua dos Trabalhadores"
@@ -217,7 +304,7 @@ object AddressNormalizer {
             if (semiParts.size >= 2) {
                 val p0 = semiParts[0]
                 val p1 = semiParts[1]
-                val p1IsPureNumber = Regex("""(?i)^\s*(?:nº|n°|n\.|numero|num)?\s*(?:\d{1,3}(?:\.\d{3})+[A-Za-z]?|\d+[A-Za-z]?|s/n|sn)\s*$""").matches(p1)
+                val p1IsPureNumber = REGEX_P1_IS_PURE_NUMBER.matches(p1)
 
                 if (p1IsPureNumber) {
                     // Formato CSV padrão: Logradouro; Número; Bairro; Cidade...
@@ -246,7 +333,7 @@ object AddressNormalizer {
                     var extractedComp = explicitComplement
 
                     if (extractedNum.isBlank()) {
-                        val leadingNumMatch = Regex("""(?i)^\s*(?:nº|n°|n\.|numero|num)?\s*(\b\d{1,3}(?:\.\d{3})+[A-Za-z]?\b|\b\d+[A-Za-z]?\b|S/N|SN)\b""").find(numCompPart)
+                        val leadingNumMatch = REGEX_LEADING_NUM_MATCH.find(numCompPart)
                         if (leadingNumMatch != null) {
                             extractedNum = leadingNumMatch.groupValues[1]
                         } else {
@@ -321,18 +408,34 @@ object AddressNormalizer {
         // 3. Extrai Número
         var finalNumber = explicitNumber
         if (finalNumber.isBlank()) {
+            // Mapeia os intervalos de caracteres que são dias de datas em nomes de ruas (ex: "15" em "15 de Julho")
+            val dateDayRanges = REGEX_DATE_IN_STREET.findAll(textWithoutComplement).mapNotNull { it.groups[1]?.range }.toList()
+
             // Prioridade A: Número explícito com prefixo (ex: "nº 120", "num 120", "n. 120")
-            val explicitPrefixMatch = Regex("""(?i)\b(?:nº|n°|n\.|numero|num)\s*(\d{1,3}(?:\.\d{3})+[A-Za-z]?|\d+[A-Za-z]?(?:-[A-Za-z0-9]+)?)\b""").find(textWithoutComplement)
+            val explicitPrefixMatch = REGEX_EXPLICIT_PREFIX_NUM.find(textWithoutComplement)
             if (explicitPrefixMatch != null) {
                 finalNumber = explicitPrefixMatch.groupValues[1].trim()
             } else {
                 // Prioridade B: Número logo após vírgula ou hífen (ex: "Rua 15 de Novembro, 120" ou "Av Limirio, 1.843")
-                val commaMatch = Regex("""(?i)[,\-]\s*(?:nº|n°|n\.|numero|num)?\s*(\d{1,3}(?:\.\d{3})+[A-Za-z]?|\d+[A-Za-z]?(?:-[A-Za-z0-9]+)?)\b""").find(textWithoutComplement)
+                val commaMatch = REGEX_COMMA_NUM.find(textWithoutComplement)
                 if (commaMatch != null) {
-                    finalNumber = commaMatch.groupValues[1].trim()
-                } else {
+                    val candidateNum = commaMatch.groupValues[1].trim()
+                    val matchRange = commaMatch.groups[1]?.range
+                    // Garante que o número após a vírgula não é parte de uma data de logradouro
+                    if (matchRange == null || dateDayRanges.none { r -> matchRange.first >= r.first && matchRange.last <= r.last }) {
+                        finalNumber = candidateNum
+                    }
+                }
+                
+                if (finalNumber.isBlank()) {
                     // Prioridade C: Se houver múltiplos números, em endereços o número do imóvel é o último (ex: "Rua 15 de Novembro 120")
-                    val numMatches = REGEX_NUMBERS_EXTRACT.findAll(textWithoutComplement).toList()
+                    // IMPORTANTE: Nunca extrai o dia de uma data que compõe o nome do logradouro (ex: "15" em "15 de Julho")
+                    val numMatches = REGEX_NUMBERS_EXTRACT.findAll(textWithoutComplement)
+                        .filter { match ->
+                            val gRange = match.groups[1]?.range ?: match.range
+                            dateDayRanges.none { r -> gRange.first >= r.first && gRange.last <= r.last }
+                        }
+                        .toList()
                     if (numMatches.isNotEmpty()) {
                         val lastMatch = numMatches.last()
                         finalNumber = lastMatch.groupValues.lastOrNull { it.isNotBlank() && it.any { c -> c.isDigit() } } ?: lastMatch.value.trim()
@@ -340,7 +443,7 @@ object AddressNormalizer {
                 }
             }
             if (finalNumber.isBlank()) {
-                val snMatch = Regex("""(?i)\b(?:s/n|sn|sem\s+n[uú]mero)\b""").find(textWithoutComplement)
+                val snMatch = REGEX_SN_MATCH.find(textWithoutComplement)
                 if (snMatch != null) {
                     finalNumber = "S/N"
                 }
@@ -351,7 +454,7 @@ object AddressNormalizer {
         var street = textWithoutComplement
         if (finalNumber.isNotBlank()) {
             if (finalNumber == "S/N") {
-                street = street.replace(Regex("""(?i)\b(?:s/n|sn|sem\s+n[uú]mero)\b"""), " ")
+                street = REGEX_SN_MATCH.replace(street, " ")
             } else if (street.contains(",") && street.contains(finalNumber)) {
                 // Se houver vírgula separando o logradouro do número, o logradouro é o que vem antes da vírgula
                 val beforeComma = street.substringBefore(",").trim()
@@ -380,7 +483,7 @@ object AddressNormalizer {
 
         return AddressComponents(
             street = capitalizeWords(street),
-            number = finalNumber.trim(),
+            number = finalNumber.replace(".", "").trim(),
             complement = finalComplement.trim(),
             neighborhood = capitalizeWords(explicitBairro)
         )
@@ -515,7 +618,7 @@ object AddressNormalizer {
 
     /**
      * Extrai apenas a rua e o número da casa a partir de um texto de endereço lido.
-     * Trata pontuações, complementos, formatos com ponto-e-vírgula (LOEC/DDA), bairros e cidades no texto.
+     * Trata pontuações, formatos com ponto-e-vírgula (LOEC/DDA), bairros e cidades no texto.
      */
     fun extractStreetAndNumber(rawAddress: String?): String {
         if (rawAddress.isNullOrBlank()) return ""
@@ -527,7 +630,7 @@ object AddressNormalizer {
         text = REGEX_CITY_UF_TRAIL.replace(text, "").trim()
         text = REGEX_PARENTHESES.replace(text, " ")
 
-        // Utiliza parseAddressComponents que extrai precisamente logradouro e número (incluindo formato com ponto-e-vírgula, milhares como 1.843, etc.)
+        // Utiliza parseAddressComponents que extrai precisamente logradouro e número
         val parsed = parseAddressComponents(text)
         if (parsed.street.isNotBlank()) {
             return if (parsed.number.isNotBlank()) {
@@ -552,6 +655,41 @@ object AddressNormalizer {
         }
 
         return cleanExtractedStreet(text)
+    }
+
+    /**
+     * Extrai o endereço limpo preservando logradouro, número e complemento (se houver).
+     */
+    fun extractCleanAddress(rawAddress: String?): String {
+        if (rawAddress.isNullOrBlank()) return ""
+        var text = rawAddress.trim()
+        
+        text = REGEX_HEADER_PREFIXES.replace(text, "")
+        text = REGEX_DATE_TRAIL.replace(text, "")
+        text = REGEX_CITY_UF_TRAIL.replace(text, "").trim()
+        text = REGEX_PARENTHESES.replace(text, " ")
+
+        val parsed = parseAddressComponents(text)
+        if (parsed.street.isNotBlank()) {
+            val base = if (parsed.number.isNotBlank()) {
+                cleanExtractedStreet("${parsed.street}, ${parsed.number}")
+            } else {
+                cleanExtractedStreet(parsed.street)
+            }
+            return if (parsed.complement.isNotBlank()) {
+                "$base - ${parsed.complement}"
+            } else {
+                base
+            }
+        }
+
+        val baseStreetAndNum = extractStreetAndNumber(text)
+        val comp = extractComplement(text)
+        return if (comp.isNotBlank() && !baseStreetAndNum.contains(comp, ignoreCase = true)) {
+            "$baseStreetAndNum - $comp"
+        } else {
+            baseStreetAndNum
+        }
     }
 
     private fun cleanExtractedStreet(text: String): String {
@@ -584,11 +722,51 @@ object AddressNormalizer {
             text = text.replace(" $normalizedAbbr", " $full")
         }
 
-        // 3. Remover caracteres de pontuação
+        // 3. Normalizar datas e numerais romanos (ex: "XV de Julho" -> "15 DE JULHO", "Quinze de Julho" -> "15 DE JULHO")
+        text = canonicalizeDatesAndNumerals(text)
+
+        // 4. Se houver pontos ou traços entre dígitos (ex: 1.843 -> 1843, 123.456.789-00 -> 12345678900), remove o separador
+        text = REGEX_DIGIT_DOT_DASH.replace(text, "")
+
+        // 5. Remover caracteres de pontuação
         text = REGEX_PUNCTUATION_NORM.replace(text, " ")
 
-        // 4. Remover múltiplos espaços em branco
+        // 6. Remover múltiplos espaços em branco
         text = MULTIPLE_SPACES_REGEX.replace(text, " ").trim()
+
+        return text
+    }
+
+    /**
+     * Converte datas expressas com numerais romanos ou por extenso para representação numérica canônica,
+     * permitindo que "XV de Julho", "15 de Julho" e "Quinze de Julho" sejam reconhecidos como o mesmo logradouro.
+     */
+    fun canonicalizeDatesAndNumerals(input: String): String {
+        var text = input
+
+        // 1. Substitui números por extenso seguidos de "DE [MÊS]" (ex: "QUINZE DE JULHO" -> "15 DE JULHO")
+        for ((pattern, replacement) in PRECOMPILED_WRITTEN_DATE_PATTERNS) {
+            text = text.replace(pattern, replacement)
+        }
+
+        // 2. Substitui numerais romanos seguidos de "DE [MÊS]" (ex: "XV DE JULHO" -> "15 DE JULHO", "VII DE SETEMBRO" -> "7 DE SETEMBRO")
+        for ((pattern, replacement) in PRECOMPILED_ROMAN_DATE_PATTERNS) {
+            text = text.replace(pattern, replacement)
+        }
+
+        // 3. Substitui numerais romanos de 2 ou mais letras que aparecem isolados em endereços (ex: "RUA XV" -> "RUA 15", "AV XIV" -> "AV 14", "PEDRO II" -> "PEDRO 2")
+        for ((pattern, replacement) in PRECOMPILED_ROMAN_ISOLATED_PATTERNS) {
+            text = text.replace(pattern, replacement)
+        }
+
+        // 4. Trata numerais romanos de 1 caractere quando precedidos por tipos de logradouro ou nomes históricos
+        text = REGEX_RUA_X.replace(text, "$1 10")
+        text = REGEX_RUA_V.replace(text, "$1 5")
+        text = REGEX_PEDRO_I.replace(text, "$1 1")
+        text = REGEX_PEDRO_II.replace(text, "$1 2")
+
+        // 5. Converte ordinais com símbolo para dígitos (ex: "1º" ou "1°" -> "1")
+        text = REGEX_ORDINAL_DIGITS.replace(text, "$1")
 
         return text
     }
@@ -624,6 +802,7 @@ object AddressNormalizer {
         }
 
         if (nTarget == nQuery) return true
+        if (stripStreetType(nTarget) == stripStreetType(nQuery)) return true
         if (qNumbers.isEmpty() && (nTarget.contains(nQuery) || nQuery.contains(nTarget))) return true
 
         val queryTokens = nQuery.split(" ").filter { it.length > 1 }
@@ -646,7 +825,14 @@ object AddressNormalizer {
 
     fun extractNumbers(text: String?): List<String> {
         if (text.isNullOrBlank()) return emptyList()
-        val rawMatches = REGEX_NUM_MATCH.findAll(text).map { it.value.uppercase(Locale.ROOT) }.toList()
+        // Ignora números que façam parte de datas no nome do logradouro (ex: "15" em "15 de Julho")
+        val dateDayRanges = REGEX_DATE_IN_STREET.findAll(text).mapNotNull { it.groups[1]?.range }.toList()
+        val rawMatches = REGEX_NUM_MATCH.findAll(text)
+            .filter { match ->
+                dateDayRanges.none { range -> match.range.first >= range.first && match.range.last <= range.last }
+            }
+            .map { it.value.uppercase(Locale.ROOT) }
+            .toList()
         val result = mutableListOf<String>()
         for (m in rawMatches) {
             val norm = normalizeNumber(m)
@@ -662,19 +848,14 @@ object AddressNormalizer {
 
     fun extractStreetSignificantWords(text: String?): List<String> {
         if (text.isNullOrBlank()) return emptyList()
-        // Se contiver ponto-e-vírgula, utiliza a rua decomposta
-        val input = if (text.contains(";")) {
-            val parsed = parseAddressComponents(text)
-            parsed.street.ifBlank { text }
-        } else {
-            text
-        }
-        val normalized = normalize(input)
+        val parsed = parseAddressComponents(text)
+        val streetInput = parsed.street.ifBlank { text }
+        val normalized = normalize(streetInput)
         return normalized.split(" ")
             .map { it.trim() }
             .filter { word ->
-                word.length >= 2 &&
-                !word.all { it.isDigit() } &&
+                word.isNotEmpty() &&
+                (word.length >= 2 || word[0].isDigit()) &&
                 word !in STOP_WORDS
             }
     }
@@ -748,8 +929,16 @@ object AddressNormalizer {
             val nTargetComp = normalize(targetComp)
             val qCompDigits = nQueryComp.filter { it.isDigit() }
             val tCompDigits = nTargetComp.filter { it.isDigit() }
-            if (qCompDigits.isNotBlank() && tCompDigits.isNotBlank() && qCompDigits != tCompDigits) {
-                // Apartamentos/unidades diferentes (ex: Apto 101 vs Apto 102) -> NÃO CORRESPONDE
+            if (qCompDigits.isNotBlank() && tCompDigits.isNotBlank()) {
+                if (qCompDigits != tCompDigits) {
+                    // Apartamentos/unidades/casas com números diferentes (ex: Casa 1 vs Casa 2, Apto 101 vs Apto 102) -> NÃO CORRESPONDE
+                    return false
+                }
+            } else if (qCompDigits.isNotBlank() != tCompDigits.isNotBlank()) {
+                // Um especifica número (ex: Casa 1) e o outro é textual (ex: Fundos) -> NÃO CORRESPONDE
+                return false
+            } else if (nQueryComp != nTargetComp && !nQueryComp.contains(nTargetComp) && !nTargetComp.contains(nQueryComp)) {
+                // Complementos textuais divergentes (ex: Fundos vs Frente, Sobrado vs Térreo) -> NÃO CORRESPONDE
                 return false
             }
         }

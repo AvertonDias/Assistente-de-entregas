@@ -21,4 +21,15 @@ interface PersonRepository {
     suspend fun prioritizeRecebedor(personId: Long, recebedorId: String): Person?
     suspend fun consolidateDuplicateAddressPersons(): Int
     suspend fun sanitizeCorruptedAddressRecords(): Int
+    suspend fun moveOrCopyReceiver(
+        sourcePerson: Person?,
+        receiver: com.example.data.model.Recebedor,
+        isMove: Boolean,
+        targetAddress: String,
+        targetNumber: String,
+        targetComplement: String,
+        targetBairro: String
+    ): Boolean
+    suspend fun removeReceiverFromPerson(person: Person, receiverIndex: Int)
+    suspend fun deleteReceiverFromAddress(personId: Long, receiver: com.example.data.model.Recebedor): Boolean
 }

@@ -81,7 +81,34 @@ object CrashReporter {
             val file = File(context.filesDir, "last_crash_report.txt")
             val sw = StringWriter()
             throwable.printStackTrace(PrintWriter(sw))
-            val text = "DATA: ${Date()}\nERRO: ${throwable.message}\nSTACKTRACE:\n$sw"
+
+            val deviceSummary = try {
+                DeviceInfoHelper.getDeviceSummary(context)
+            } catch (_: Throwable) { null }
+
+            val text = buildString {
+                appendLine("=== REGISTRO DE FALHA CRÍTICA (CRASH) ===")
+                appendLine("Data e Hora: ${Date()}")
+                if (deviceSummary != null) {
+                    appendLine("Dispositivo: ${deviceSummary.manufacturer} ${deviceSummary.model} (${deviceSummary.brand})")
+                    appendLine("Android: ${deviceSummary.androidVersion} (API ${deviceSummary.sdkInt})")
+                    appendLine("Memória RAM Livre: ${deviceSummary.availRamFormatted} de ${deviceSummary.totalRamFormatted} (LowMem: ${deviceSummary.isLowMemory})")
+                    appendLine("Bateria: ${deviceSummary.batteryLevelPct}% (${deviceSummary.batteryStatus})")
+                    appendLine("Economia de Bateria: ${deviceSummary.isPowerSaveMode}")
+                    appendLine("Rede: ${deviceSummary.networkType}")
+                    appendLine("App: v${deviceSummary.appVersionName} (${deviceSummary.appVersionCode})")
+                    appendLine("Uptime: ${deviceSummary.appUptimeFormatted}")
+                }
+                appendLine("\n--- TIPO DA EXCEÇÃO ---")
+                appendLine(throwable.javaClass.name)
+                appendLine("Mensagem: ${throwable.localizedMessage ?: throwable.message}")
+                appendLine("\n--- STACKTRACE COMPLETO ---")
+                appendLine(sw.toString())
+                appendLine("\n--- ÚLTIMOS LOGS ANTES DA FALHA ---")
+                getRecentLogs().takeLast(20).forEach { logLine ->
+                    appendLine(logLine)
+                }
+            }
             file.writeText(text)
         } catch (_: Throwable) {}
     }
@@ -94,6 +121,24 @@ object CrashReporter {
         } catch (_: Throwable) {
             null
         }
+    }
+
+    fun clearCrashReport(): Boolean {
+        return try {
+            val context = appContext ?: return false
+            val file = File(context.filesDir, "last_crash_report.txt")
+            if (file.exists()) file.delete() else true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun clearLogs() {
+        inMemoryLogs.clear()
+    }
+
+    fun simulateDiagnosticTestWarning() {
+        recordException(RuntimeException("Teste de Diagnóstico Manual disparado pelo usuário para validação de telemetria."), "TesteManual")
     }
 
     fun getRecentLogs(): List<String> {

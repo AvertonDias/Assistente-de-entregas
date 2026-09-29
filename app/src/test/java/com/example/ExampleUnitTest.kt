@@ -141,9 +141,9 @@ class ExampleUnitTest {
     val case3 = "Av Limirio Pereira de Melo, 1.843 - Sem Bairro - Monte Santo de Minas/MG"
     val parsed3 = AddressNormalizer.parseAddressComponents(case3)
     assertEquals("Av Limirio Pereira de Melo", parsed3.street)
-    assertEquals("1.843", parsed3.number)
+    assertEquals("1843", parsed3.number)
     val ext3 = AddressNormalizer.extractStreetAndNumber(case3)
-    assertEquals("Av Limirio Pereira de Melo, 1.843", ext3)
+    assertEquals("Av Limirio Pereira de Melo, 1843", ext3)
     assertTrue(AddressNormalizer.matchesPrecise(case3, "Av Limirio Pereira de Melo", "1843"))
     assertTrue(AddressNormalizer.matchesPrecise(case3, "Av Limirio Pereira de Melo", "1.843"))
     assertTrue(AddressNormalizer.matchesPrecise(case3, "Avenida Limírio Pereira de Melo", "1843"))
@@ -160,4 +160,112 @@ class ExampleUnitTest {
     assertTrue(AddressNormalizer.matchesPrecise(case4, "São Miguel", "404"))
     assertTrue(AddressNormalizer.matchesPrecise(case4, "R. Sao Miguel", "404"))
   }
+
+  @Test
+  fun testDateAndRomanNumeralAddresses() {
+    // 1. Não deve tratar o "15" em "15 de Julho" como número da casa se não houver outro número
+    val parsedStreetOnly15 = AddressNormalizer.parseAddressComponents("15 de Julho")
+    assertEquals("15 de Julho", parsedStreetOnly15.street)
+    assertEquals("", parsedStreetOnly15.number)
+
+    val parsedStreetOnlyXV = AddressNormalizer.parseAddressComponents("XV de Julho")
+    assertEquals("Xv de Julho", parsedStreetOnlyXV.street)
+    assertEquals("", parsedStreetOnlyXV.number)
+
+    // 2. Extração de número de imóvel quando a rua contém data
+    val parsedWithNumber1 = AddressNormalizer.parseAddressComponents("15 de Julho, 120")
+    assertEquals("15 de Julho", parsedWithNumber1.street)
+    assertEquals("120", parsedWithNumber1.number)
+
+    val parsedWithNumber2 = AddressNormalizer.parseAddressComponents("Rua XV de Julho, 120")
+    assertEquals("Rua Xv de Julho", parsedWithNumber2.street)
+    assertEquals("120", parsedWithNumber2.number)
+
+    val parsedWithNumber3 = AddressNormalizer.parseAddressComponents("XV de Julho 120")
+    assertEquals("Xv de Julho", parsedWithNumber3.street)
+    assertEquals("120", parsedWithNumber3.number)
+
+    // 3. Normalização canônica equivalendo "XV de Julho", "15 de Julho" e "Quinze de Julho"
+    val norm1 = AddressNormalizer.normalize("XV de Julho")
+    val norm2 = AddressNormalizer.normalize("15 de Julho")
+    val norm3 = AddressNormalizer.normalize("Quinze de Julho")
+    assertEquals("15 DE JULHO", norm1)
+    assertEquals("15 DE JULHO", norm2)
+    assertEquals("15 DE JULHO", norm3)
+
+    // 4. Correspondência precisa cruzada (banco tem "Rua 15 de Julho", tela traz "XV de Julho, 120")
+    assertTrue(AddressNormalizer.matchesPrecise("XV de Julho, 120", "Rua 15 de Julho", "120"))
+    assertTrue(AddressNormalizer.matchesPrecise("15 de Julho, 120", "Rua XV de Julho", "120"))
+    assertTrue(AddressNormalizer.matchesPrecise("Rua XV de Julho, 120", "15 de Julho", "120"))
+    assertTrue(AddressNormalizer.matchesPrecise("Rua Quinze de Julho, 120", "15 de Julho", "120"))
+
+    // 5. Números diferentes de casa NÃO devem corresponder mesmo na mesma rua
+    assertFalse(AddressNormalizer.matchesPrecise("XV de Julho, 120", "Rua 15 de Julho", "130"))
+    assertFalse(AddressNormalizer.matchesPrecise("15 de Julho, 120", "Rua XV de Julho", "15"))
+
+    // 6. Testes com outras datas históricas comuns
+    assertEquals("7 DE SETEMBRO", AddressNormalizer.normalize("7 de Setembro"))
+    assertEquals("7 DE SETEMBRO", AddressNormalizer.normalize("VII de Setembro"))
+    assertEquals("7 DE SETEMBRO", AddressNormalizer.normalize("Sete de Setembro"))
+    assertTrue(AddressNormalizer.matchesPrecise("VII de Setembro, 50", "Rua 7 de Setembro", "50"))
+
+    assertEquals("24 DE MAIO", AddressNormalizer.normalize("24 de Maio"))
+    assertEquals("24 DE MAIO", AddressNormalizer.normalize("XXIV de Maio"))
+    assertEquals("24 DE MAIO", AddressNormalizer.normalize("Vinte e Quatro de Maio"))
+    assertTrue(AddressNormalizer.matchesPrecise("XXIV de Maio, 80", "Rua 24 de Maio", "80"))
+
+    assertEquals("1 DE MAIO", AddressNormalizer.normalize("1º de Maio"))
+    assertEquals("1 DE MAIO", AddressNormalizer.normalize("Primeiro de Maio"))
+    assertEquals("1 DE MAIO", AddressNormalizer.normalize("1 de Maio"))
+    assertTrue(AddressNormalizer.matchesPrecise("1º de Maio, 30", "Rua Primeiro de Maio", "30"))
+
+    // 7. Extração de números não deve capturar o dia da data
+    assertEquals(emptyList<String>(), AddressNormalizer.extractNumbers("15 de Julho"))
+    assertEquals(listOf("120"), AddressNormalizer.extractNumbers("15 de Julho, 120"))
+    assertEquals(listOf("120"), AddressNormalizer.extractNumbers("XV de Julho, 120"))
+  }
+
+  @Test
+  fun testAddressComplementRecognitionAndDisambiguation() {
+    // 1. Extração de complemento em endereços com Casa 1, Casa 2, Apto 101, Fundos
+    val parsed1 = AddressNormalizer.parseAddressComponents("Rua das Flores, 123 Casa 1")
+    assertEquals("Rua das Flores", parsed1.street)
+    assertEquals("123", parsed1.number)
+    assertEquals("Casa 1", parsed1.complement)
+    assertTrue(parsed1.hasComplement)
+
+    val parsed2 = AddressNormalizer.parseAddressComponents("Rua das Flores, 123 Casa 2")
+    assertEquals("Casa 2", parsed2.complement)
+
+    val parsedFundos = AddressNormalizer.parseAddressComponents("Rua das Flores, 123 Fundos")
+    assertEquals("Fundos", parsedFundos.complement)
+
+    // 2. Quando a tela NÃO tem complemento (apenas "Rua das Flores, 123"):
+    // matchesPrecise com banco que tem complemento ("Casa 1", "Casa 2") deve retornar TRUE,
+    // permitindo que o assistente liste todas as casas daquele endereço para o usuário escolher!
+    assertTrue(AddressNormalizer.matchesPrecise("Rua das Flores, 123", "Rua das Flores", "123", "Casa 1"))
+    assertTrue(AddressNormalizer.matchesPrecise("Rua das Flores, 123", "Rua das Flores", "123", "Casa 2"))
+    assertTrue(AddressNormalizer.matchesPrecise("Rua das Flores, 123", "Rua das Flores", "123", "Fundos"))
+
+    // 3. Quando a tela ESPECIFICA complemento ("Rua das Flores, 123 Casa 1"):
+    // Deve corresponder com Casa 1, mas NÃO deve corresponder com Casa 2!
+    assertTrue(AddressNormalizer.matchesPrecise("Rua das Flores, 123 Casa 1", "Rua das Flores", "123", "Casa 1"))
+    assertFalse(AddressNormalizer.matchesPrecise("Rua das Flores, 123 Casa 1", "Rua das Flores", "123", "Casa 2"))
+
+    // 4. extractCleanAddress preserva o complemento se presente
+    val cleanWithComp = AddressNormalizer.extractCleanAddress("Rua das Flores, 123 Casa 1")
+    assertTrue(cleanWithComp.contains("Casa 1"))
+
+    // 5. extractStreetAndNumber retorna a base limpa
+    val cleanBase = AddressNormalizer.extractStreetAndNumber("Rua das Flores, 123 Casa 1")
+    assertEquals("Rua das Flores, 123", cleanBase)
+  }
+
+  @Test
+  fun testSearchAntenor663NotRegistered() {
+    assertFalse(AddressNormalizer.matchesPrecise("Antenor 663", "Primeiro de Maio", "66"))
+    assertFalse(AddressNormalizer.matchesPrecise("Antenor 663", "Primeiro de Maio", "136"))
+    assertFalse(AddressNormalizer.matches("Antenor 663", "Primeiro de Maio"))
+  }
 }
+

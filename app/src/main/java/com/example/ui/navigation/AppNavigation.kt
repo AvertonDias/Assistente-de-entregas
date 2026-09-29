@@ -183,6 +183,16 @@ fun AppNavigation(
             )
         }
 
+        composable(Screen.DailyReport.route) {
+            val dailyReportViewModel: com.example.ui.screens.report.DailyReportViewModel = viewModel(
+                factory = com.example.ui.screens.report.DailyReportViewModel.Factory(app.activityReportRepository)
+            )
+            com.example.ui.screens.report.DailyReportScreen(
+                viewModel = dailyReportViewModel,
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
         composable(Screen.Settings.route) {
             val settingsViewModel: SettingsViewModel = viewModel(
                 factory = SettingsViewModel.Factory(
