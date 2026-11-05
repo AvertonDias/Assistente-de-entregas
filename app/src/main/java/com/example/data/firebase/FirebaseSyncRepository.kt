@@ -44,27 +44,21 @@ class FirebaseSyncRepositoryImpl(
             if (FirebaseApp.getApps(appContext).isEmpty()) {
                 val app = FirebaseApp.initializeApp(appContext)
                 if (app == null) {
-                    val options = com.google.firebase.FirebaseOptions.Builder()
-                        .setApplicationId("1:946779143583:android:ea254adf31519413b591aa")
-                        .setApiKey("AIzaSyDKSJOuGg8nDr4HTiF9SXZcdYrl6FSeB0w")
-                        .setProjectId("assistente-de-entregas")
-                        .setStorageBucket("assistente-de-entregas.firebasestorage.app")
-                        .build()
-                    FirebaseApp.initializeApp(appContext, options)
+                    val options = com.google.firebase.FirebaseOptions.fromResource(appContext)
+                    if (options != null) {
+                        FirebaseApp.initializeApp(appContext, options)
+                    }
                 }
             }
             FirebaseFirestore.getInstance()
         } catch (e: Exception) {
             Log.w("FirebaseSync", "Firestore not available: ${e.message}")
             try {
-                val options = com.google.firebase.FirebaseOptions.Builder()
-                    .setApplicationId("1:946779143583:android:ea254adf31519413b591aa")
-                    .setApiKey("AIzaSyDKSJOuGg8nDr4HTiF9SXZcdYrl6FSeB0w")
-                    .setProjectId("assistente-de-entregas")
-                    .setStorageBucket("assistente-de-entregas.firebasestorage.app")
-                    .build()
-                val app = FirebaseApp.initializeApp(appContext, options, "fallback_firestore_app")
-                FirebaseFirestore.getInstance(app)
+                val options = com.google.firebase.FirebaseOptions.fromResource(appContext)
+                if (options != null) {
+                    val app = FirebaseApp.initializeApp(appContext, options, "fallback_firestore_app")
+                    FirebaseFirestore.getInstance(app)
+                } else null
             } catch (e2: Exception) {
                 Log.e("FirebaseSync", "Firestore complete failure: ${e2.message}")
                 null

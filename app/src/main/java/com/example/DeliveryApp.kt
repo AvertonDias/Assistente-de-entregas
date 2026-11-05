@@ -62,24 +62,18 @@ class DeliveryApp : Application() {
             if (FirebaseApp.getApps(this).isEmpty()) {
                 val app = FirebaseApp.initializeApp(this)
                 if (app == null) {
-                    val options = com.google.firebase.FirebaseOptions.Builder()
-                        .setApplicationId("1:946779143583:android:ea254adf31519413b591aa")
-                        .setApiKey("AIzaSyDKSJOuGg8nDr4HTiF9SXZcdYrl6FSeB0w")
-                        .setProjectId("assistente-de-entregas")
-                        .setStorageBucket("assistente-de-entregas.firebasestorage.app")
-                        .build()
-                    FirebaseApp.initializeApp(this, options)
+                    val options = com.google.firebase.FirebaseOptions.fromResource(this)
+                    if (options != null) {
+                        FirebaseApp.initializeApp(this, options)
+                    }
                 }
             }
         } catch (e: Exception) {
             try {
-                val options = com.google.firebase.FirebaseOptions.Builder()
-                    .setApplicationId("1:946779143583:android:ea254adf31519413b591aa")
-                    .setApiKey("AIzaSyDKSJOuGg8nDr4HTiF9SXZcdYrl6FSeB0w")
-                    .setProjectId("assistente-de-entregas")
-                    .setStorageBucket("assistente-de-entregas.firebasestorage.app")
-                    .build()
-                FirebaseApp.initializeApp(this, options)
+                val options = com.google.firebase.FirebaseOptions.fromResource(this)
+                if (options != null) {
+                    FirebaseApp.initializeApp(this, options)
+                }
             } catch (e2: Exception) {
                 Log.w("DeliveryApp", "Firebase initialization fallback error: ${e.message} / ${e2.message}")
             }
