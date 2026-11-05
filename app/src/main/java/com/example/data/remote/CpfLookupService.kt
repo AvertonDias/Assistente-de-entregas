@@ -13,18 +13,12 @@ object CpfLookupService {
     private const val TAG = "CpfLookupService"
     private const val BASE_URL = "https://apicpf.com/api/consulta"
 
-    const val FALLBACK_API_KEY = "ff10aa9e1548fddf98ea6891711222c6f5ba60abe2c342800340dbebb62bcb9d"
-
     val defaultApiKey: String
         get() = try {
             val key = BuildConfig.APICPF_KEY
-            if (key.isNullOrBlank() || key.startsWith("MY_")) {
-                FALLBACK_API_KEY
-            } else {
-                key
-            }
+            if (key.isNullOrBlank() || key.startsWith("MY_")) "" else key
         } catch (_: Throwable) {
-            FALLBACK_API_KEY
+            ""
         }
 
     private val client by lazy {
@@ -50,6 +44,12 @@ object CpfLookupService {
         }
 
         val effectiveKey = (customApiKey?.trim()?.takeIf { it.isNotBlank() }) ?: defaultApiKey
+        if (effectiveKey.isBlank()) {
+            return@withContext CpfLookupResult(
+                success = false,
+                errorMessage = "Chave da API CPF não configurada."
+            )
+        }
 
         try {
             val url = "$BASE_URL?cpf=$cleanCpf"
