@@ -464,7 +464,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             WindowManager.LayoutParams.WRAP_CONTENT,
             layoutFlag,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
+            PixelFormat.TRANSPARENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 20
@@ -472,6 +472,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         }
 
         floatingView = ComposeView(this).apply {
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
             setViewTreeLifecycleOwner(this@FloatingBubbleService)
             setViewTreeSavedStateRegistryOwner(this@FloatingBubbleService)
 
@@ -4693,14 +4694,13 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                     Box(
                         modifier = Modifier
                             .size(bubbleSize)
-                            .shadow(8.dp, CircleShape)
                             .clip(CircleShape)
                             .background(
                                 Brush.linearGradient(
                                     colors = listOf(Color(0xFF1976D2), Color(0xFF0D47A1))
                                 )
                             )
-                            .border(2.dp, Color.White.copy(alpha = 0.8f), CircleShape)
+                            .border(2.dp, Color.White, CircleShape)
                             .pointerInput(Unit) {
                                 detectDragGestures { change, dragAmount ->
                                     change.consume()
