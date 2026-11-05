@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
+import com.example.util.ToastHelper
 
 class AreaSelectorOverlay(
     private val context: Context,
@@ -57,7 +58,7 @@ class AreaSelectorOverlay(
 
         try {
             windowManager.addView(overlayView, params)
-            Toast.makeText(context, "✏️ Arraste o dedo na tela para desenhar o retângulo do endereço", Toast.LENGTH_LONG).show()
+            ToastHelper.showLong(context, "✏️ Arraste o dedo na tela para desenhar o retângulo do endereço")
         } catch (e: Exception) {
             e.printStackTrace()
             onDismiss()

@@ -239,7 +239,7 @@ object SpeechHelper {
         return if (cleaned.length == 11 && cleaned.all { it.isDigit() }) {
             "${cleaned.substring(0, 3)}.${cleaned.substring(3, 6)}.${cleaned.substring(6, 9)}-${cleaned.substring(9, 11)}"
         } else {
-            cleaned
+            cleaned.uppercase(java.util.Locale.ROOT)
         }
     }
 
@@ -289,7 +289,7 @@ object SpeechHelper {
         onError: (String) -> Unit = {}
     ): SpeechRecognizer? {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            Toast.makeText(context, "Reconhecimento de voz indisponível neste aparelho", Toast.LENGTH_SHORT).show()
+            ToastHelper.show(context, "Reconhecimento de voz indisponível neste aparelho")
             onError("Reconhecimento de voz não disponível")
             return null
         }

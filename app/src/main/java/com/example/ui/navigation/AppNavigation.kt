@@ -11,6 +11,7 @@ import androidx.navigation.navArgument
 import com.example.DeliveryApp
 import com.example.ui.screens.auth.AuthScreen
 import com.example.ui.screens.auth.AuthViewModel
+import com.example.ui.screens.splash.SplashScreen
 import com.example.ui.screens.delivery.DeliveryModeScreen
 import com.example.ui.screens.delivery.DeliveryModeViewModel
 import com.example.ui.screens.diagnostic.DiagnosticScreen
@@ -54,17 +55,29 @@ fun AppNavigation(
         }
     }
 
-    // Se já houver usuário autenticado no Firebase, inicia direto na Home
-    val startDestination = if (app.authRepository.currentUser != null) {
-        Screen.Home.route
-    } else {
-        Screen.Auth.route
-    }
+    // Inicia na tela de Splash exibindo a logo e verificando se está logado
+    val startDestination = Screen.Splash.route
 
     NavHost(
         navController = navController,
         startDestination = startDestination
     ) {
+        composable(Screen.Splash.route) {
+            SplashScreen(
+                authRepository = app.authRepository,
+                onNavigateToHome = {
+                    navController.navigate(Screen.Home.route) {
+                        popUpTo(Screen.Splash.route) { inclusive = true }
+                    }
+                },
+                onNavigateToAuth = {
+                    navController.navigate(Screen.Auth.route) {
+                        popUpTo(Screen.Splash.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+
         composable(Screen.Auth.route) {
             AuthScreen(
                 viewModel = authViewModel,

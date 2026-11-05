@@ -1,5 +1,7 @@
 package com.example.ui.screens.people
 
+import com.example.util.ToastHelper
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +25,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -132,17 +135,17 @@ fun PeopleListScreen(
     }
 
     fun hasMultipleReceivers(person: Person): Boolean {
-        if (person.coRecebedoresJson.isNotBlank()) {
-            try {
-                val extras = Recebedor.listFromJson(person.coRecebedoresJson)
-                val validExtras = extras.count { it.nome.isNotBlank() || it.documento.isNotBlank() }
-                val hasMain = person.nome.isNotBlank() || person.documento.isNotBlank()
-                return ((if (hasMain) 1 else 0) + validExtras) > 1
-            } catch (_: Throwable) {
-                return true
-            }
+        val json = person.coRecebedoresJson
+        if (json.isBlank() || json == "[]" || json.length < 10) return false
+        if (!json.contains("\"nome\"") && !json.contains("\"documento\"")) return false
+        try {
+            val extras = Recebedor.listFromJson(json)
+            val validExtras = extras.count { it.nome.isNotBlank() || it.documento.isNotBlank() }
+            val hasMain = person.nome.isNotBlank() || person.documento.isNotBlank()
+            return ((if (hasMain) 1 else 0) + validExtras) > 1
+        } catch (_: Throwable) {
+            return false
         }
-        return false
     }
 
     val multipleCount = remember(persons) {
@@ -425,8 +428,9 @@ fun PeopleListScreen(
                     Text("Remover Recebedor", fontWeight = FontWeight.Bold)
                 },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Deseja realmente remover este recebedor do endereço?")
+                    SelectionContainer {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Deseja realmente remover este recebedor do endereço?")
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
@@ -462,6 +466,7 @@ fun PeopleListScreen(
                             fontWeight = FontWeight.Medium
                         )
                     }
+                }
                 },
                 confirmButton = {
                     Button(
@@ -469,7 +474,7 @@ fun PeopleListScreen(
                             viewModel.removeReceiverFromPerson(target.person, target.index)
                             receiverToDelete = null
                             FeedbackHelper.triggerSuccess(context)
-                            Toast.makeText(context, "Recebedor removido com sucesso!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Recebedor removido com sucesso!")
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) {
@@ -508,8 +513,9 @@ fun PeopleListScreen(
                     Text(if (isMultiple) "Excluir Endereço Completo?" else "Excluir Cadastro", fontWeight = FontWeight.Bold)
                 },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (isMultiple) {
+                    SelectionContainer {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (isMultiple) {
                             Text(
                                 text = "Atenção: este endereço possui ${targetReceivers.size} recebedores cadastrados:",
                                 fontWeight = FontWeight.SemiBold
@@ -531,6 +537,7 @@ fun PeopleListScreen(
                             Text("Deseja realmente excluir o cadastro de ${target.nome.ifBlank { "Destinatário" }} (${target.endereco}, Nº ${target.numero})? Esta ação não pode ser desfeita.")
                         }
                     }
+                }
                 },
                 confirmButton = {
                     Button(
@@ -538,7 +545,7 @@ fun PeopleListScreen(
                             viewModel.deletePerson(target)
                             personToDelete = null
                             FeedbackHelper.triggerSuccess(context)
-                            Toast.makeText(context, "Cadastro excluído!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Cadastro excluído!")
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) {
@@ -587,14 +594,15 @@ private fun PersonCardItem(
         list
     }
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("person_item_${person.id}"),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
+    SelectionContainer {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("person_item_${person.id}"),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
         Column(modifier = Modifier.padding(14.dp)) {
             // TÍTULO PRINCIPAL: ENDEREÇO COM DESTAQUE PARA NÚMERO E UNIDADE (APTO / BLOCO / CASA)
             Row(
@@ -947,4 +955,5 @@ private fun PersonCardItem(
             }
         }
     }
+}
 }

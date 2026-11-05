@@ -47,7 +47,8 @@ class SettingsRepositoryImpl(
             scanAreaBottom = prefs.getFloat("scan_area_bottom", 0.40f),
             customAreaConfigured = prefs.getBoolean("custom_area_configured", false),
             signatureSpeedMode = prefs.getString("signature_speed_mode", "ULTRA_SLOW") ?: "ULTRA_SLOW",
-            updateJsonUrl = prefs.getString("update_json_url", "") ?: ""
+            updateJsonUrl = prefs.getString("update_json_url", "") ?: "",
+            selectedCity = prefs.getString("selected_city", "Monte Santo de Minas") ?: "Monte Santo de Minas"
         )
     }
 
@@ -79,8 +80,12 @@ class SettingsRepositoryImpl(
             .putBoolean("custom_area_configured", settings.customAreaConfigured)
             .putString("signature_speed_mode", settings.signatureSpeedMode)
             .putString("update_json_url", settings.updateJsonUrl)
+            .putString("selected_city", settings.selectedCity)
             .apply()
     }
+
+    override suspend fun getSelectedCity(): String = _settingsFlow.value.selectedCity
+    override suspend fun setSelectedCity(city: String) = updateSettings { it.copy(selectedCity = city) }
 
     override suspend fun setBubbleEnabled(enabled: Boolean) = updateSettings { it.copy(bubbleEnabled = enabled) }
     override suspend fun setBubbleSize(sizeDp: Int) = updateSettings { it.copy(bubbleSizeDp = sizeDp) }

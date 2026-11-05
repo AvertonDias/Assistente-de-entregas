@@ -16,6 +16,8 @@ import com.example.data.repository.SettingsRepository
 import com.example.data.repository.SettingsRepositoryImpl
 import com.example.data.repository.SignatureRepository
 import com.example.data.repository.SignatureRepositoryImpl
+import com.example.data.repository.StreetCatalogRepository
+import com.example.data.repository.StreetCatalogRepositoryImpl
 import com.example.data.repository.ActivityReportRepository
 import com.example.data.repository.ActivityReportRepositoryImpl
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +40,9 @@ class DeliveryApp : Application() {
     }
     val firebaseSyncRepository: FirebaseSyncRepository by lazy {
         FirebaseSyncRepositoryImpl(this, database.personDao(), database.deliveryDao())
+    }
+    val streetCatalogRepository: StreetCatalogRepository by lazy {
+        StreetCatalogRepositoryImpl(database.streetCatalogDao(), database.personDao(), settingsRepository, applicationScope)
     }
 
     override fun onCreate() {
@@ -81,6 +86,8 @@ class DeliveryApp : Application() {
         }
         com.example.util.CrashReporter.init(this)
         com.example.util.AppActivityTracker.init(this, activityReportRepository)
+        com.example.data.remote.CpfApiUsageTracker.init(this)
+        com.example.data.remote.CpfVerificationTracker.init(this)
 
         applicationScope.launch(Dispatchers.IO) {
             try {

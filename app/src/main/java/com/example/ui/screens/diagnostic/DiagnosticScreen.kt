@@ -1,5 +1,7 @@
 package com.example.ui.screens.diagnostic
 
+import com.example.util.ToastHelper
+
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -93,7 +95,7 @@ fun DiagnosticScreen(
                     IconButton(onClick = {
                         refreshKey++
                         lastCrashReport = CrashReporter.getLastCrashReport()
-                        Toast.makeText(context, "Dados atualizados!", Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(context, "Dados atualizados!")
                     }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Atualizar Dados", tint = Color.White)
                     }
@@ -162,7 +164,7 @@ fun DiagnosticScreen(
                                             includeLogs = true
                                         )
                                         DeviceInfoHelper.copyToClipboard(context, "Relatório Diagnóstico", fullReport)
-                                        Toast.makeText(context, "Relatório completo copiado para a área de transferência!", Toast.LENGTH_LONG).show()
+                                        ToastHelper.showLong(context, "Relatório completo copiado para a área de transferência!")
                                     },
                                     modifier = Modifier.weight(1f),
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
@@ -422,7 +424,7 @@ fun DiagnosticScreen(
                                         onClick = {
                                             CrashReporter.clearCrashReport()
                                             lastCrashReport = null
-                                            Toast.makeText(context, "Registro de crash excluído.", Toast.LENGTH_SHORT).show()
+                                            ToastHelper.show(context, "Registro de crash excluído.")
                                         },
                                         modifier = Modifier.size(28.dp)
                                     ) {
@@ -466,7 +468,7 @@ fun DiagnosticScreen(
                             onClick = {
                                 CrashReporter.simulateDiagnosticTestWarning()
                                 lastCrashReport = CrashReporter.getLastCrashReport()
-                                Toast.makeText(context, "Erro de teste registrado para análise!", Toast.LENGTH_SHORT).show()
+                                ToastHelper.show(context, "Erro de teste registrado para análise!")
                             },
                             modifier = Modifier.weight(1f)
                         ) {
@@ -479,7 +481,7 @@ fun DiagnosticScreen(
                             onClick = {
                                 CrashReporter.clearLogs()
                                 refreshKey++
-                                Toast.makeText(context, "Logs internos limpos.", Toast.LENGTH_SHORT).show()
+                                ToastHelper.show(context, "Logs internos limpos.")
                             },
                             modifier = Modifier.weight(1f)
                         ) {

@@ -14,7 +14,7 @@ object ClipboardHelper {
                 val clip = ClipData.newPlainText(label, text)
                 clipboard.setPrimaryClip(clip)
                 if (showToast) {
-                    Toast.makeText(context, "$label copiado.", Toast.LENGTH_SHORT).show()
+                    ToastHelper.show(context, "$label copiado.")
                 }
                 true
             } else {

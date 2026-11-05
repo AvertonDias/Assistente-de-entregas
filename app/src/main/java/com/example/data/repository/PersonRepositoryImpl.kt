@@ -239,10 +239,21 @@ class PersonRepositoryImpl(
     override fun searchPersons(query: String): Flow<List<Person>> {
         val trimmed = query.trim()
         return cachedIndexedPersons.map { indexedList ->
-            if (trimmed.isBlank()) {
-                indexedList.map { it.person }
+            val listToUse = if (indexedList.isEmpty()) {
+                try {
+                    val direct = personDao.getAllPersonsDirect()
+                    direct.map { indexPerson(it) }
+                } catch (e: Exception) {
+                    indexedList
+                }
             } else {
-                filterIndexedPersonsByQuery(indexedList, trimmed)
+                indexedList
+            }
+
+            if (trimmed.isBlank()) {
+                listToUse.map { it.person }
+            } else {
+                filterIndexedPersonsByQuery(listToUse, trimmed)
             }
         }.flowOn(Dispatchers.Default)
     }
@@ -267,9 +278,19 @@ class PersonRepositoryImpl(
         val commonPrefixes = setOf(
             "RUA", "R", "AV", "AVENIDA", "TRAVESSA", "TRAV", "TV", "ALAMEDA", "AL",
             "PRACA", "PCA", "PR", "RODOVIA", "ROD", "ESTRADA", "EST",
+            "DR", "DRA", "DOUTOR", "DOUTORA", "CEL", "CORONEL", "PROF", "PROFESSOR",
+            "STA", "SANTA", "STO", "SANTO",
             "DE", "DA", "DO", "DOS", "DAS", "E", "EM", "NO", "NA", "NOS", "NAS", "AO", "AOS",
             "NUMERO", "NUM", "N", "NO", "CASA", "CS", "AP", "APT", "APTO", "BLOCO", "BL"
         )
+
+        // Identifica se a busca possui nome de rua e número juntos (busca de endereço)
+        val parsedQueryAddr = AddressNormalizer.parseAddressComponents(trimmed)
+        val strippedQueryStreet = AddressNormalizer.stripStreetType(parsedQueryAddr.street)
+        val queryHasStreetAndNumber = parsedQueryAddr.street.isNotBlank() &&
+            strippedQueryStreet.isNotBlank() &&
+            !strippedQueryStreet.all { it.isDigit() || it == '-' || it == ',' || it == '.' } &&
+            cleanQueryNumbers.isNotEmpty()
 
         // Identifica se a busca é essencialmente numérica (apenas número ou prefixos como Nº, Casa, Apto)
         val isNumberOnlySearch = queryTokens.all { token ->
@@ -306,7 +327,26 @@ class PersonRepositoryImpl(
 
             var score = 0
 
-            if (isNumberOnlySearch && primaryQueryNumber.isNotBlank()) {
+            if (queryHasStreetAndNumber) {
+                // Busca de endereço (Rua + Número): OBRIGATORIAMENTE rua E número devem pertencer à mesma residência!
+                val streetMatches = AddressNormalizer.areStreetNamesMatching(parsedQueryAddr.street, item.person.endereco)
+                val numberMatches = cleanQueryNumbers.any { qNum ->
+                    item.pCleanNumber == qNum || item.pDigitsNumber == qNum || item.pRawNumber.equals(qNum, ignoreCase = true) ||
+                    AddressNormalizer.areNumbersMatching(qNum, item.person.numero)
+                }
+
+                if (streetMatches && numberMatches) {
+                    score = 1500
+                    if (parsedQueryAddr.complement.isNotBlank() && item.pNormComplement.contains(AddressNormalizer.normalize(parsedQueryAddr.complement))) {
+                        score += 200
+                    }
+                } else if (streetMatches && cleanQueryNumbers.isEmpty()) {
+                    score = 400
+                } else {
+                    // Rua diferente! Rejeita imediatamente (score = 0) para NUNCA puxar pessoas de outra rua com mesmo número!
+                    score = 0
+                }
+            } else if (isNumberOnlySearch && primaryQueryNumber.isNotBlank()) {
                 // Caso A: Busca puramente pelo número (ex: "123", "1.843", "nº 123", "num 1843")
                 when {
                     item.pCleanNumber == primaryQueryNumber || item.pDigitsNumber == primaryQueryNumber || item.pRawNumber.equals(primaryQueryNumber, ignoreCase = true) -> {
@@ -329,22 +369,21 @@ class PersonRepositoryImpl(
                     }
                 }
             } else {
-                // Caso B: Busca com palavras e números (ex: "Flores 123", "Rua das Flores, 1.843", "Paraná 100")
-                // ou busca por nome/rua ("Flores", "Carlos", "São Paulo")
+                // Caso B: Busca com palavras (ex: "Flores", "Carlos", "São Paulo")
                 val allCoreTokensMatch = coreTokens.all { matchesToken(it) }
 
                 if (allCoreTokensMatch) {
                     score = 200
 
-                    // Bônus se tiver número e casar perfeitamente com o número da casa
+                    // Bônus se tiver número e casar perfeitamente com o número da casa da mesma rua
                     if (cleanQueryNumbers.isNotEmpty()) {
                         val hasExactNumber = cleanQueryNumbers.any { qNum ->
                             item.pCleanNumber == qNum || item.pDigitsNumber == qNum || item.pRawNumber.equals(qNum, ignoreCase = true)
                         }
-                        if (hasExactNumber) {
-                            score += 800 // Bônus gigante: bateu a rua e o número exato!
-                        } else if (cleanQueryNumbers.any { item.pCleanNumber.contains(it) || item.pDigitsNumber.contains(it) || item.pNormComplement.contains(it) }) {
-                            score += 400
+                        if (hasExactNumber && AddressNormalizer.areStreetNamesMatching(normQuery, item.person.endereco)) {
+                            score += 800 // Bônus: bateu a rua e o número exato!
+                        } else if (hasExactNumber) {
+                            score += 100
                         }
                     }
 
@@ -361,15 +400,6 @@ class PersonRepositoryImpl(
                     // Bônus se o documento bate
                     if (item.pDigitsDoc.isNotBlank() && normQuery.filter { it.isDigit() }.let { it.isNotBlank() && (item.pDigitsDoc.contains(it) || it.contains(item.pDigitsDoc)) }) {
                         score += 250
-                    }
-                } else if (cleanQueryNumbers.isNotEmpty()) {
-                    // Se nem todos os tokens bateram, mas tem número exato e ao menos uma palavra da rua ou nome bateu
-                    val hasExactNum = cleanQueryNumbers.any { item.pCleanNumber == it || item.pDigitsNumber == it || item.pRawNumber.equals(it, ignoreCase = true) }
-                    val hasAnyWordMatch = coreTokens.filter { !it.all { c -> c.isDigit() } }.any { word ->
-                        word.length >= 2 && matchesToken(word)
-                    }
-                    if (hasExactNum && hasAnyWordMatch) {
-                        score = 750
                     }
                 }
 
@@ -411,8 +441,14 @@ class PersonRepositoryImpl(
         val effectiveNumber = numStr.ifBlank { allNumbersInQuery.firstOrNull() ?: "" }
         val normEffectiveNumber = AddressNormalizer.normalizeNumber(effectiveNumber)
 
-        val sigWords = AddressNormalizer.extractStreetSignificantWords(parsedRaw.street.ifBlank { rawAddress })
-        // Prioriza palavras com 3 ou mais letras (ex: "JULHO"), garantindo correspondência mesmo se no banco estiver "XV" e na busca "15"
+        val queryStreet = parsedRaw.street.ifBlank { rawAddress }
+        // Se a busca não possui nome de rua válido (ex: apenas números), não deve casar com nenhuma rua!
+        val strippedQueryStreet = AddressNormalizer.stripStreetType(queryStreet)
+        if (strippedQueryStreet.isBlank() || strippedQueryStreet.all { it.isDigit() || it == '-' || it == ',' || it == '.' }) {
+            return@withContext emptyList()
+        }
+
+        val sigWords = AddressNormalizer.extractStreetSignificantWords(queryStreet)
         val keyword = sigWords.firstOrNull { it.length >= 3 && it.any { c -> c.isLetter() } } ?: sigWords.firstOrNull() ?: ""
 
         val cached = cachedIndexedPersons.value
@@ -457,43 +493,35 @@ class PersonRepositoryImpl(
         }
         if (candidates.isEmpty()) return@withContext emptyList()
 
-        // Match preciso de endereço, número e complemento considerando apenas as candidatas
+        // Match preciso de endereço: OBRIGATORIAMENTE rua E número devem bater juntos!
         val hasQueryComplement = parsedRaw.complement.isNotBlank()
         val rawMatches = candidates.filter { p ->
-            AddressNormalizer.matchesPrecise(rawAddress, p.endereco, p.numero, p.complemento) ||
-            AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero}", p.numero, p.complemento) ||
-            AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero} ${p.complemento} ${p.bairro} ${p.cidade}", p.numero, p.complemento) ||
-            (!hasQueryComplement && parsedRaw.street.isNotBlank() && parsedRaw.number.isNotBlank() && AddressNormalizer.matchesPrecise("${parsedRaw.street}, ${parsedRaw.number}", p.endereco, p.numero, p.complemento)) ||
-            (!hasSpecificNumber && p.endereco.isNotBlank() && AddressNormalizer.matches(rawAddress, p.endereco))
-        }.distinctBy { it.id }
-
-        // Se a busca especificou um número de imóvel, NUNCA permitir resultados de números diferentes!
-        val matches = if (hasSpecificNumber && effectiveNumber.isNotBlank()) {
-            rawMatches.filter { p ->
+            val streetMatches = AddressNormalizer.areStreetNamesMatching(queryStreet, p.endereco)
+            val numMatches = if (hasSpecificNumber && effectiveNumber.isNotBlank()) {
                 val pNum = p.numero.trim()
                 val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
                 val targetNum = pNum.ifBlank { parsedP.number }
                 targetNum.isNotBlank() && AddressNormalizer.areNumbersMatching(effectiveNumber, targetNum)
-            }
-        } else {
-            rawMatches
-        }
+            } else true
 
-        if (matches.isNotEmpty()) {
-            sortPersonsByStreetNameOnly(matches)
+            streetMatches && numMatches && (
+                AddressNormalizer.matchesPrecise(rawAddress, p.endereco, p.numero, p.complemento) ||
+                AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero}", p.numero, p.complemento) ||
+                AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero} ${p.complemento} ${p.bairro} ${p.cidade}", p.numero, p.complemento) ||
+                (!hasQueryComplement && parsedRaw.street.isNotBlank() && parsedRaw.number.isNotBlank() && AddressNormalizer.matchesPrecise("${parsedRaw.street}, ${parsedRaw.number}", p.endereco, p.numero, p.complemento))
+            )
+        }.distinctBy { it.id }
+
+        if (rawMatches.isNotEmpty()) {
+            sortPersonsByStreetNameOnly(rawMatches)
         } else {
-            // Se o endereço buscado possui um número específico (ex: "Rua X, 115") ou não achou match,
-            // retorna vazio imediatamente sem ler a tabela inteira na memória.
-            if (hasSpecificNumber) {
-                emptyList()
-            } else {
-                filterPersonsByQuery(candidates, rawAddress)
-            }
+            emptyList()
         }
     }
 
     override suspend fun insertPerson(person: Person): Long {
         val id = personDao.insertPerson(person)
+        com.example.util.SavedRecipientLookupHelper.invalidateCache()
         com.example.util.AppActivityTracker.logAction(
             actionType = "PERSON_CREATED",
             title = "Destinatário Cadastrado",
@@ -510,6 +538,7 @@ class PersonRepositoryImpl(
         persons.chunked(50).forEach { chunk ->
             personDao.insertAll(chunk)
         }
+        com.example.util.SavedRecipientLookupHelper.invalidateCache()
         com.example.util.AppActivityTracker.logAction(
             actionType = "PERSONS_IMPORTED",
             title = "Destinatários Importados em Lote",
@@ -521,6 +550,7 @@ class PersonRepositoryImpl(
 
     override suspend fun updatePerson(person: Person) {
         personDao.updatePerson(person)
+        com.example.util.SavedRecipientLookupHelper.invalidateCache()
         com.example.util.AppActivityTracker.logAction(
             actionType = "PERSON_UPDATED",
             title = "Destinatário Atualizado",
@@ -532,6 +562,7 @@ class PersonRepositoryImpl(
 
     override suspend fun deletePerson(person: Person) {
         personDao.deletePerson(person)
+        com.example.util.SavedRecipientLookupHelper.invalidateCache()
         com.example.util.AppActivityTracker.logAction(
             actionType = "PERSON_DELETED",
             title = "Destinatário Removido",
@@ -560,14 +591,15 @@ class PersonRepositoryImpl(
         personDao.updatePerson(person.copy(dataAtualizacao = System.currentTimeMillis()))
     }
 
-    override suspend fun prioritizeRecebedor(personId: Long, recebedorId: String): Person? = withContext(Dispatchers.IO) {
+    override suspend fun prioritizeRecebedor(personId: Long, recebedorId: String, recebedorNome: String?): Person? = withContext(Dispatchers.IO) {
         val person = personDao.getPersonById(personId) ?: return@withContext null
         val now = System.currentTimeMillis()
 
-        val isAlreadyMain = recebedorId.isBlank() ||
+        val isAlreadyMain = (recebedorId.isBlank() ||
                 recebedorId == "main" ||
                 recebedorId == "p_${person.id}_main" ||
-                recebedorId.endsWith("_main")
+                recebedorId.endsWith("_main")) &&
+                (recebedorNome.isNullOrBlank() || person.nome.trim().equals(recebedorNome.trim(), ignoreCase = true))
 
         if (isAlreadyMain) {
             val updated = person.copy(dataAtualizacao = now)
@@ -581,16 +613,26 @@ class PersonRepositoryImpl(
             .removePrefix("p_${person.id}_")
             .removePrefix("co_")
 
-        val targetIdx = extras.indexOfFirst {
+        var targetIdx = extras.indexOfFirst {
             it.id == cleanRecId ||
             it.id == recebedorId ||
             "p_${person.id}_co_${it.id}" == recebedorId ||
             (it.id.startsWith("co_") && it.id.removePrefix("co_") == cleanRecId)
         }
 
+        if (targetIdx < 0 && !recebedorNome.isNullOrBlank()) {
+            val normTarget = com.example.util.AddressNormalizer.normalize(recebedorNome.trim())
+            targetIdx = extras.indexOfFirst {
+                com.example.util.AddressNormalizer.normalize(it.nome.trim()) == normTarget
+            }
+        }
+
         if (targetIdx < 0) {
             val byNameIdx = extras.indexOfFirst {
-                it.nome.isNotBlank() && recebedorId.contains(it.nome, ignoreCase = true)
+                it.nome.isNotBlank() && (
+                    recebedorId.contains(it.nome, ignoreCase = true) ||
+                    (!recebedorNome.isNullOrBlank() && it.nome.contains(recebedorNome, ignoreCase = true))
+                )
             }
             if (byNameIdx < 0) {
                 val updated = person.copy(dataAtualizacao = now)
@@ -848,18 +890,66 @@ class PersonRepositoryImpl(
 
         if (cleanStreet.isBlank()) return@withContext false
 
+        val freshSource = if (sourcePerson != null && sourcePerson.id > 0) {
+            personDao.getPersonById(sourcePerson.id) ?: sourcePerson
+        } else sourcePerson
+
+        // Coleta todos os moradores do cadastro de origem
+        val allSourceReceivers = mutableListOf<Recebedor>()
+        if (freshSource != null) {
+            if (freshSource.nome.isNotBlank() || freshSource.documento.isNotBlank()) {
+                allSourceReceivers.add(
+                    Recebedor(
+                        id = "main",
+                        nome = freshSource.nome,
+                        documento = freshSource.documento,
+                        assinatura = freshSource.assinatura
+                    )
+                )
+            }
+            if (freshSource.coRecebedoresJson.isNotBlank()) {
+                try {
+                    allSourceReceivers.addAll(Recebedor.listFromJson(freshSource.coRecebedoresJson))
+                } catch (_: Throwable) {}
+            }
+        }
+
+        // CASO 1: É uma mudança de complemento/endereço (isMove=true) e o cadastro de origem possui APENAS este morador
+        // Nesse caso, atualizamos diretamente o complemento e dados da pessoa existente
+        if (isMove && freshSource != null && allSourceReceivers.size <= 1) {
+            val updated = freshSource.copy(
+                endereco = cleanStreet,
+                numero = cleanNum,
+                complemento = cleanComp,
+                bairro = cleanBairro.ifBlank { freshSource.bairro },
+                dataAtualizacao = System.currentTimeMillis()
+            )
+            personDao.updatePerson(updated)
+            return@withContext true
+        }
+
+        // CASO 2: O cadastro de origem possui múltiplos moradores e estamos movendo ou copiando um morador específico
         val searchKey = if (cleanNum.isNotBlank()) "$cleanStreet, $cleanNum" else cleanStreet
         val existingList = findPersonsByAddress(searchKey)
-        val targetPerson = existingList.firstOrNull {
-            AddressNormalizer.areNumbersMatching(it.numero, cleanNum) &&
-            (cleanComp.isBlank() || it.complemento.isBlank() || it.complemento.equals(cleanComp, ignoreCase = true))
-        } ?: if (cleanNum.isBlank()) existingList.firstOrNull() else null
+
+        // Busca se já existe OUTRA residência/unidade com esse mesmo complemento exato
+        val targetPerson = existingList.firstOrNull { candidate ->
+            candidate.id != freshSource?.id &&
+            AddressNormalizer.areStreetNamesMatching(candidate.endereco, cleanStreet) &&
+            AddressNormalizer.areNumbersMatching(candidate.numero, cleanNum) &&
+            (if (cleanComp.isNotBlank()) {
+                candidate.complemento.trim().equals(cleanComp, ignoreCase = true) ||
+                AddressNormalizer.normalize(candidate.complemento) == AddressNormalizer.normalize(cleanComp)
+            } else {
+                candidate.complemento.isBlank()
+            })
+        }
 
         val newRec = receiver.copy(
             id = "rec_${System.currentTimeMillis()}",
             nome = AddressNormalizer.capitalizeWords(receiver.nome.trim()),
             documento = receiver.documento.trim()
-            // receiver.assinatura is fully preserved!
+            // Assinatura totalmente preservada
         )
 
         if (targetPerson != null) {
@@ -881,6 +971,7 @@ class PersonRepositoryImpl(
                 personDao.updatePerson(updatedTarget)
             }
         } else {
+            // Cria um novo registro de residência para o novo complemento
             val newPerson = Person(
                 nome = newRec.nome,
                 documento = newRec.documento,
@@ -888,41 +979,21 @@ class PersonRepositoryImpl(
                 numero = cleanNum,
                 complemento = cleanComp,
                 bairro = cleanBairro,
-                assinatura = newRec.assinatura
+                assinatura = newRec.assinatura,
+                dataAtualizacao = System.currentTimeMillis()
             )
             personDao.insertPerson(newPerson)
         }
 
-        if (isMove && sourcePerson != null && sourcePerson.id > 0) {
-            val freshSource = personDao.getPersonById(sourcePerson.id) ?: sourcePerson
-            val allReceivers = mutableListOf<Recebedor>()
-            if (freshSource.nome.isNotBlank() || freshSource.documento.isNotBlank()) {
-                allReceivers.add(
-                    Recebedor(
-                        id = "main",
-                        nome = freshSource.nome,
-                        documento = freshSource.documento,
-                        assinatura = freshSource.assinatura
-                    )
-                )
-            }
-            if (freshSource.coRecebedoresJson.isNotBlank()) {
-                try {
-                    allReceivers.addAll(Recebedor.listFromJson(freshSource.coRecebedoresJson))
-                } catch (_: Throwable) {}
-            }
-
-            val matchIndex = allReceivers.indexOfFirst {
+        // Se foi mover, remove do cadastro de origem onde existiam outros moradores
+        if (isMove && freshSource != null && freshSource.id > 0) {
+            val matchIndex = allSourceReceivers.indexOfFirst {
                 it.id == receiver.id || (it.nome.trim().equals(receiver.nome.trim(), ignoreCase = true) && it.documento.trim() == receiver.documento.trim())
             }
             if (matchIndex != -1) {
                 removeReceiverFromPerson(freshSource, matchIndex)
             }
         }
-
-        try {
-            consolidateDuplicateAddressPersons()
-        } catch (_: Throwable) {}
 
         true
     }

@@ -17,6 +17,8 @@ interface SettingsRepository {
     suspend fun setCustomScanArea(left: Float, top: Float, right: Float, bottom: Float)
     suspend fun setSignatureSpeedMode(speed: String) // "ULTRA_SLOW", "SLOW", "NORMAL", "FAST"
     suspend fun setUpdateJsonUrl(url: String)
+    suspend fun getSelectedCity(): String
+    suspend fun setSelectedCity(city: String)
     suspend fun exportAllDataJson(): String
     suspend fun importDataJson(jsonStr: String, merge: Boolean): ImportResult
 }
@@ -39,7 +41,8 @@ data class AppSettings(
     val scanAreaBottom: Float = 0.40f,
     val customAreaConfigured: Boolean = false,
     val signatureSpeedMode: String = "ULTRA_SLOW",
-    val updateJsonUrl: String = "https://api.github.com/repos/AvertonDias/Assistente-de-entregas/releases/latest"
+    val updateJsonUrl: String = "https://api.github.com/repos/AvertonDias/Assistente-de-entregas/releases/latest",
+    val selectedCity: String = "Monte Santo de Minas"
 )
 
 data class ImportResult(

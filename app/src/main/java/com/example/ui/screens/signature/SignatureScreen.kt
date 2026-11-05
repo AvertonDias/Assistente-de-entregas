@@ -1,5 +1,7 @@
 package com.example.ui.screens.signature
 
+import com.example.util.ToastHelper
+
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -82,7 +84,7 @@ fun SignatureScreen(
                         deliveryId = if (deliveryId > 0) deliveryId else null,
                         signature = signatureData
                     )
-                    Toast.makeText(context, "Assinatura registrada com sucesso.", Toast.LENGTH_SHORT).show()
+                    ToastHelper.show(context, "Assinatura registrada com sucesso.")
                     onSignatureConfirmed(signatureData)
                     onNavigateBack()
                 }

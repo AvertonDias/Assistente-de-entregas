@@ -57,6 +57,18 @@ class PeopleViewModel(
         _tempSignature.value = signature
     }
 
+    suspend fun getStreetSuggestions(query: String): List<com.example.data.local.entity.StreetCatalog> {
+        val trimmed = query.trim()
+        if (trimmed.length < 2) return emptyList()
+        return try {
+            val streetRepo = DeliveryApp.instance.streetCatalogRepository
+            val city = streetRepo.getSelectedCity()
+            streetRepo.searchStreetsSync(trimmed, city, limit = 6)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     val persons: StateFlow<List<Person>> = _searchQuery
         .flatMapLatest { query: String ->
             personRepository.searchPersons(query)
@@ -113,6 +125,7 @@ class PeopleViewModel(
                 val fullAddress = if (person.numero.isNotBlank()) "${person.endereco}, ${person.numero}" else person.endereco
                 val existingList = personRepository.findPersonsByAddress(fullAddress)
                 val matchingHouse = existingList.firstOrNull {
+                    AddressNormalizer.areStreetNamesMatching(it.endereco, person.endereco) &&
                     AddressNormalizer.areNumbersMatching(it.numero, person.numero) &&
                     (person.complemento.isBlank() || it.complemento.isBlank() || it.complemento.equals(person.complemento, ignoreCase = true))
                 }

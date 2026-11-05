@@ -1,5 +1,7 @@
 package com.example.ui.screens.delivery
 
+import com.example.util.ToastHelper
+
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +25,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -87,7 +90,7 @@ fun DeliveryModeScreen(
         if (isGranted) {
             pendingMicAction?.invoke()
         } else {
-            Toast.makeText(context, "Permissão do microfone necessária para falar o endereço.", Toast.LENGTH_SHORT).show()
+            ToastHelper.show(context, "Permissão do microfone necessária para falar o endereço.")
         }
         pendingMicAction = null
     }
@@ -132,7 +135,8 @@ fun DeliveryModeScreen(
                 .background(MaterialTheme.colorScheme.background),
             contentAlignment = Alignment.TopCenter
         ) {
-            LazyColumn(
+            SelectionContainer {
+                LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .widthIn(max = 700.dp)
@@ -172,7 +176,7 @@ fun DeliveryModeScreen(
                                                     isListeningAddress = true
                                                     com.example.util.SpeechHelper.startListening(
                                                         context = context,
-                                                        onReady = { Toast.makeText(context, "Fale o endereço...", Toast.LENGTH_SHORT).show() },
+                                                        onReady = { ToastHelper.show(context, "Fale o endereço...") },
                                                         onResult = { result ->
                                                             isListeningAddress = false
                                                             if (result.isNotBlank()) {
@@ -182,7 +186,7 @@ fun DeliveryModeScreen(
                                                         },
                                                         onError = { err ->
                                                             isListeningAddress = false
-                                                            Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                                            ToastHelper.show(context, err)
                                                         }
                                                     )
                                                 }
@@ -442,7 +446,7 @@ fun DeliveryModeScreen(
                 Button(
                     onClick = {
                         val msg = viewModel.fillFields()
-                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(context, msg)
                     },
                     enabled = state.selectedPerson != null,
                     modifier = Modifier
@@ -515,7 +519,7 @@ fun DeliveryModeScreen(
                 Button(
                     onClick = {
                         viewModel.finishDelivery {
-                            Toast.makeText(context, "Entrega finalizada com sucesso!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Entrega finalizada com sucesso!")
                             onNavigateBack()
                         }
                     },
@@ -531,6 +535,7 @@ fun DeliveryModeScreen(
                     Text("✓ FINALIZAR ENTREGA", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
                 }
             }
+        }
         }
     }
 }

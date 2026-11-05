@@ -76,6 +76,7 @@ object AddressNormalizer {
     private val REGEX_PEDRO_I = Regex("""(?i)\b(PEDRO|DOM PEDRO|D PEDRO)\s+I\b""")
     private val REGEX_PEDRO_II = Regex("""(?i)\b(PEDRO|DOM PEDRO|D PEDRO)\s+II\b""")
     private val REGEX_ORDINAL_DIGITS = Regex("""\b(\d+)[ºª°]\b""")
+    private val REGEX_GLUED_PREFIXES = Regex("""(?i)\b(DR|DRA|CEL|PROF|STA|STO|PCA|TRAV|ROD|CAP|MAJ|TEN)\.?([A-Za-zÀ-ÿ]{3,})\b""")
 
     private val COMPLEMENT_PATTERN = Regex(
         """(?i)\b(?:(apartamento|apto|apt|ap)\.?\s*(\d+[A-Za-z]?|[A-Za-z]\b)|(bloco|blo|bl)\.?\s+([0-9A-Za-z]{1,4})|(torre|tor)\.?\s+([0-9A-Za-z]{1,4}|norte|sul|leste|oeste)|(casa|cs)\.?\s*(\d+[A-Za-z]?|[A-Za-z]\b)|(sala|sl)\.?\s*(\d+[A-Za-z]?|[A-Za-z]\b)|(conjunto|conj|cj)\.?\s*(\d+[A-Za-z]?|[A-Za-z]\b)|(quadra|qd)\.?\s*([0-9A-Za-z]{1,4})|(lote|lt)\.?\s*([0-9A-Za-z]{1,4})|(andar|pavimento|pav)\.?\s*(\d{1,3}[ºª]?|[0-9A-Za-z]{1,3})|(fundos|fds|frente|sobrado|térreo|terreo|galpão|galpao|subsolo))\b"""
@@ -282,6 +283,7 @@ object AddressNormalizer {
         text = REGEX_HEADER_PREFIXES.replace(text, "")
         text = REGEX_DATE_TRAIL.replace(text, "")
         text = REGEX_CITY_UF_TRAIL.replace(text, "").trim()
+        text = REGEX_GLUED_PREFIXES.replace(text, "$1 $2")
 
         var explicitNumber = rawNumber.trim()
         var explicitComplement = rawComplement.trim()
@@ -711,6 +713,9 @@ object AddressNormalizer {
         val decomposed = Normalizer.normalize(text, Normalizer.Form.NFD)
         text = REGEX_DIACRITICS.replace(decomposed, "")
 
+        // 1.1 Separar títulos/prefixos grudados por erro de OCR ou digitação (ex: drpedro -> DR PEDRO, celantonio -> CEL ANTONIO)
+        text = REGEX_GLUED_PREFIXES.replace(text, "$1 $2")
+
         // 2. Substituir abreviações conhecidas
         for ((abbr, full) in ABBREVIATIONS) {
             val normalizedAbbr = REGEX_DIACRITICS.replace(Normalizer.normalize(abbr, Normalizer.Form.NFD), "").uppercase(Locale.ROOT)
@@ -780,38 +785,25 @@ object AddressNormalizer {
 
         if (nQuery.isBlank() || nTarget.isBlank()) return false
 
-        // Validação estrita de número: se ambos têm números extraídos e diferem, não correspondem
         val parsedQ = parseAddressComponents(query)
         val parsedT = parseAddressComponents(target)
-        if (parsedQ.number.isNotBlank() && parsedT.number.isNotBlank()) {
-            if (!areNumbersMatching(parsedQ.number, parsedT.number)) {
-                return false
-            }
-        }
 
-        val qNumbers = extractNumbers(nQuery)
-        val tNumbers = extractNumbers(nTarget)
-        if (qNumbers.isNotEmpty() && tNumbers.isNotEmpty()) {
-            val hasCommonNumber = qNumbers.any { qNum ->
-                tNumbers.any { tNum -> areNumbersMatching(qNum, tNum) }
-            }
-            if (!hasCommonNumber) return false
-        } else if (qNumbers.isNotEmpty() && tNumbers.isEmpty()) {
-            // Se a busca possui número específico e o alvo não possui número, não corresponde
+        val qNum = parsedQ.number.ifBlank { extractNumbers(nQuery).firstOrNull() ?: "" }
+        val tNum = parsedT.number.ifBlank { extractNumbers(nTarget).firstOrNull() ?: "" }
+
+        if (qNum.isNotBlank() && tNum.isNotBlank()) {
+            if (!areNumbersMatching(qNum, tNum)) return false
+        } else if (qNum.isNotBlank() && tNum.isBlank()) {
             return false
         }
 
-        if (nTarget == nQuery) return true
-        if (stripStreetType(nTarget) == stripStreetType(nQuery)) return true
-        if (qNumbers.isEmpty() && (nTarget.contains(nQuery) || nQuery.contains(nTarget))) return true
+        val qStreet = parsedQ.street.ifBlank { nQuery }
+        val tStreet = parsedT.street.ifBlank { target }
+        if (qStreet.isNotBlank() && tStreet.isNotBlank()) {
+            return areStreetNamesMatching(qStreet, tStreet)
+        }
 
-        val queryTokens = nQuery.split(" ").filter { it.length > 1 }
-        val targetTokens = nTarget.split(" ").toSet()
-
-        if (queryTokens.isEmpty()) return false
-        val matchedCount = queryTokens.count { targetTokens.contains(it) || nTarget.contains(it) }
-
-        return (matchedCount.toFloat() / queryTokens.size) >= 0.75f
+        return false
     }
 
     private val STOP_WORDS = setOf(
@@ -850,18 +842,91 @@ object AddressNormalizer {
         if (text.isNullOrBlank()) return emptyList()
         val parsed = parseAddressComponents(text)
         val streetInput = parsed.street.ifBlank { text }
-        val normalized = normalize(streetInput)
-        return normalized.split(" ")
+        val stripped = stripStreetType(streetInput).ifBlank { streetInput }
+        val normalized = normalize(stripped)
+        val words = normalized.split(" ")
             .map { it.trim() }
             .filter { word ->
                 word.isNotEmpty() &&
-                (word.length >= 2 || word[0].isDigit()) &&
                 word !in STOP_WORDS
             }
+        if (words.isEmpty()) {
+            val nonStop = normalized.split(" ").map { it.trim() }.filter { it.isNotEmpty() && it !in STOP_WORDS }
+            if (nonStop.isNotEmpty()) return nonStop
+        }
+        return words
     }
 
     /**
-     * Compara se dois endereços correspondem ao MESMO local com alta tolerância
+     * Verifica com precisão se dois nomes de rua / logradouro correspondem à MESMA rua.
+     * Requer que as palavras essenciais do nome da rua combinem, impedindo falsos positivos
+     * entre ruas distintas (ex: "São Pedro" vs "São Paulo", ou "Tiradentes" vs "Getúlio Vargas").
+     */
+    fun areStreetNamesMatching(street1: String?, street2: String?): Boolean {
+        if (street1.isNullOrBlank() || street2.isNullOrBlank()) return false
+
+        val s1 = normalize(street1).trim()
+        val s2 = normalize(street2).trim()
+        if (s1 == s2) return true
+
+        val stripped1 = stripStreetType(s1).trim().ifBlank { s1 }
+        val stripped2 = stripStreetType(s2).trim().ifBlank { s2 }
+        if (stripped1 == stripped2) return true
+
+        val core1 = stripped1.filter { it.isLetterOrDigit() }
+        val core2 = stripped2.filter { it.isLetterOrDigit() }
+        if (core1 == core2 && core1.isNotBlank()) return true
+
+        val words1 = extractStreetSignificantWords(stripped1)
+        val words2 = extractStreetSignificantWords(stripped2)
+
+        if (words1.isEmpty() || words2.isEmpty()) {
+            return core1.isNotBlank() && core1 == core2
+        }
+
+        // Se ambos são de palavra única (ex: "TIRADENTES" vs "TIRADENTES", ou "A" vs "A")
+        if (words1.size == 1 && words2.size == 1) {
+            return isSimilarWord(words1[0], words2[0])
+        }
+
+        // Títulos e modificadores comuns em logradouros que NÃO podem ser o único match
+        val streetTitles = setOf(
+            "SAO", "SANTO", "SANTA", "PRESIDENTE", "GOVERNADOR", "DOUTOR", "DR", "CORONEL", "CEL",
+            "PROFESSOR", "PROF", "PADRE", "PE", "DOM", "MINISTRO", "GENERAL", "GEN", "ALMIRANTE",
+            "CAPITAO", "TENENTE", "MAJOR", "SARGENTO", "DELEGADO", "VEREADOR", "PREFEITO",
+            "DEPUTADO", "SENADOR", "PRINCESA", "PRINCEPE", "BARAO", "BARONESA", "CONDE", "VISCONDE"
+        )
+
+        val nonTitleWords1 = words1.filter { it !in streetTitles }
+        val nonTitleWords2 = words2.filter { it !in streetTitles }
+
+        if (nonTitleWords1.isEmpty() || nonTitleWords2.isEmpty()) {
+            return words1 == words2
+        }
+
+        val matchedNonTitles1 = nonTitleWords1.count { w1 ->
+            nonTitleWords2.any { w2 -> isSimilarWord(w1, w2) }
+        }
+        val matchedNonTitles2 = nonTitleWords2.count { w2 ->
+            nonTitleWords1.any { w1 -> isSimilarWord(w2, w1) }
+        }
+
+        // Se nenhuma palavra essencial/não-título bateu, NÃO CORRESPONDE!
+        if (matchedNonTitles1 == 0 || matchedNonTitles2 == 0) {
+            return false
+        }
+
+        val ratio1 = matchedNonTitles1.toFloat() / nonTitleWords1.size
+        val ratio2 = matchedNonTitles2.toFloat() / nonTitleWords2.size
+
+        return (ratio1 >= 0.6f && ratio2 >= 0.6f) ||
+               (ratio1 >= 0.75f && nonTitleWords2.size == 1) ||
+               (ratio2 >= 0.75f && nonTitleWords1.size == 1) ||
+               (matchedNonTitles1 >= 2 && matchedNonTitles2 >= 2)
+    }
+
+    /**
+     * Compara se dois endereços correspondem ao MESMO local exigindo rua E número juntos.
      */
     fun matchesPrecise(
         queryAddress: String,
@@ -890,37 +955,34 @@ object AddressNormalizer {
             rawComplement = targetComplement
         )
 
-        // 1. Validação estrita do Número do Imóvel / Casa (DEVE SER FEITA ANTES DE CONTAINS)
-        if (parsedQuery.number.isNotBlank() && parsedTarget.number.isNotBlank()) {
-            if (!areNumbersMatching(parsedQuery.number, parsedTarget.number)) {
-                // Números da casa/imóvel são diferentes (ex: 10 vs 20 ou 10 vs 100) -> NÃO CORRESPONDE
-                return false
-            }
-        } else if (parsedQuery.number.isNotBlank() && parsedTarget.number.isBlank()) {
-            // Busca especifica número (ex: 10), mas o cadastro não possui número registrado -> NÃO CORRESPONDE
-            return false
-        } else {
-            // Fallback de segurança com extração direta de números se a decomposição de componentes falhou
-            val queryNumbers = extractNumbers(nQuery)
-            val targetNumbers = if (targetNumber.isNotBlank()) {
-                extractNumbers(targetNumber).ifEmpty { extractNumbers(nTarget) }
-            } else {
-                extractNumbers(nTarget)
-            }
-
-            if (queryNumbers.isNotEmpty() && targetNumbers.isNotEmpty()) {
-                val hasCommonNumber = queryNumbers.any { qNum ->
-                    targetNumbers.any { tNum -> areNumbersMatching(qNum, tNum) }
-                }
-                if (!hasCommonNumber) {
-                    return false
-                }
-            } else if (queryNumbers.isNotEmpty() && targetNumbers.isEmpty()) {
-                return false
-            }
+        // 1. Validação estrita do Número do Imóvel / Casa:
+        // Ambos DEVEM ter número e os números DEVEM ser correspondentes!
+        val qNum = parsedQuery.number.ifBlank {
+            extractNumbers(nQuery).firstOrNull() ?: ""
+        }
+        val tNum = parsedTarget.number.ifBlank {
+            if (targetNumber.isNotBlank()) targetNumber else extractNumbers(nTarget).firstOrNull() ?: ""
         }
 
-        // 2. Validação de Complemento / Unidade / Apartamento (se informado em ambos)
+        if (qNum.isNotBlank() && tNum.isNotBlank()) {
+            if (!areNumbersMatching(qNum, tNum)) {
+                return false
+            }
+        } else if (qNum.isNotBlank() && tNum.isBlank()) {
+            return false
+        } else if (qNum.isBlank() && tNum.isNotBlank()) {
+            return false
+        }
+
+        // 2. Validação estrita do Nome da Rua / Logradouro:
+        // OBRIGATÓRIO: A rua DEVE corresponder! Não pode puxar residência de outra rua!
+        val qStreet = parsedQuery.street.ifBlank { nQuery }
+        val tStreet = parsedTarget.street.ifBlank { targetAddress }
+        if (!areStreetNamesMatching(qStreet, tStreet)) {
+            return false
+        }
+
+        // 3. Validação de Complemento / Unidade / Apartamento (se informado em ambos)
         val queryComp = if (parsedQuery.complement.isNotBlank()) parsedQuery.complement else extractComplement(queryAddress)
         val targetComp = if (parsedTarget.complement.isNotBlank()) parsedTarget.complement else if (targetComplement.isNotBlank()) targetComplement else extractComplement(targetAddress)
 
@@ -931,46 +993,16 @@ object AddressNormalizer {
             val tCompDigits = nTargetComp.filter { it.isDigit() }
             if (qCompDigits.isNotBlank() && tCompDigits.isNotBlank()) {
                 if (qCompDigits != tCompDigits) {
-                    // Apartamentos/unidades/casas com números diferentes (ex: Casa 1 vs Casa 2, Apto 101 vs Apto 102) -> NÃO CORRESPONDE
                     return false
                 }
             } else if (qCompDigits.isNotBlank() != tCompDigits.isNotBlank()) {
-                // Um especifica número (ex: Casa 1) e o outro é textual (ex: Fundos) -> NÃO CORRESPONDE
                 return false
             } else if (nQueryComp != nTargetComp && !nQueryComp.contains(nTargetComp) && !nTargetComp.contains(nQueryComp)) {
-                // Complementos textuais divergentes (ex: Fundos vs Frente, Sobrado vs Térreo) -> NÃO CORRESPONDE
                 return false
             }
         }
 
-        // 3. Se após validações estritas de número e complemento os textos forem idênticos
-        if (nQuery == nTarget) {
-            return true
-        }
-
-        // 4. Validação do Nome da Rua / Logradouro (palavras significativas)
-        val queryWords = extractStreetSignificantWords(parsedQuery.street.ifBlank { nQuery })
-        val targetWords = extractStreetSignificantWords(parsedTarget.street.ifBlank { nTarget })
-
-        if (queryWords.isEmpty() || targetWords.isEmpty()) {
-            return nQuery.contains(nTarget) || nTarget.contains(nQuery)
-        }
-
-        val targetInQueryCount = targetWords.count { word ->
-            nQuery.contains(word) || queryWords.any { qWord ->
-                isSimilarWord(qWord, word)
-            }
-        }
-        val queryInTargetCount = queryWords.count { word ->
-            nTarget.contains(word) || targetWords.any { tWord ->
-                isSimilarWord(tWord, word)
-            }
-        }
-
-        val targetRatio = targetInQueryCount.toFloat() / targetWords.size
-        val queryRatio = queryInTargetCount.toFloat() / queryWords.size
-
-        return targetRatio >= 0.6f || (queryRatio >= 0.6f && targetInQueryCount > 0) || (targetInQueryCount >= 2) || (targetWords.size == 1 && targetInQueryCount == 1)
+        return true
     }
 
     /**

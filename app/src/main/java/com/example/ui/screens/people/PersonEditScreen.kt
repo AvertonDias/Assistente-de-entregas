@@ -1,6 +1,7 @@
 package com.example.ui.screens.people
 
 import android.widget.Toast
+import com.example.util.ToastHelper
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,13 +18,25 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.example.DeliveryApp
+import com.example.data.remote.CpfLookupService
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -34,6 +47,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
@@ -54,6 +68,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -114,6 +129,17 @@ fun PersonEditScreen(
     var complement by remember { mutableStateOf("") }
     var neighborhood by remember { mutableStateOf("") }
     var addressError by remember { mutableStateOf(false) }
+
+    var streetSuggestions by remember { mutableStateOf<List<com.example.data.local.entity.StreetCatalog>>(emptyList()) }
+    LaunchedEffect(address) {
+        val trimmed = address.trim()
+        if (trimmed.length >= 2) {
+            delay(200)
+            streetSuggestions = viewModel.getStreetSuggestions(trimmed)
+        } else {
+            streetSuggestions = emptyList()
+        }
+    }
 
     var recebedoresList by remember { mutableStateOf<List<Recebedor>>(emptyList()) }
 
@@ -177,6 +203,7 @@ fun PersonEditScreen(
             confirmButton = {
                 Button(
                     onClick = {
+                        com.example.util.RecipientDraftManager.clearScreenDraft(context, personId)
                         showDiscardScreenConfirmDialog = false
                         onNavigateBack()
                     },
@@ -279,6 +306,35 @@ fun PersonEditScreen(
                 initialRecebedoresLoaded = initialList
             }
         }
+
+        // Recupera rascunho não salvo localmente se o usuário fechou o app
+        val screenDraft = com.example.util.RecipientDraftManager.getScreenDraft(context, personId)
+        if (screenDraft != null) {
+            if (screenDraft.address.isNotBlank()) address = screenDraft.address
+            if (screenDraft.number.isNotBlank()) number = screenDraft.number
+            if (screenDraft.complement.isNotBlank()) complement = screenDraft.complement
+            if (screenDraft.neighborhood.isNotBlank()) neighborhood = screenDraft.neighborhood
+            if (screenDraft.recebedoresJson.isNotBlank()) {
+                val draftList = Recebedor.listFromJson(screenDraft.recebedoresJson)
+                if (draftList.isNotEmpty()) {
+                    recebedoresList = draftList
+                }
+            }
+        }
+    }
+
+    // Salva automaticamente no storage local a cada alteração feita nos campos da tela (com debounce para fluidez)
+    LaunchedEffect(address, number, complement, neighborhood, recebedoresList) {
+        delay(600)
+        com.example.util.RecipientDraftManager.saveScreenDraft(
+            context = context,
+            personId = personId,
+            address = address,
+            number = number,
+            complement = complement,
+            neighborhood = neighborhood,
+            recebedoresJson = Recebedor.listToJson(recebedoresList)
+        )
     }
 
     Scaffold(
@@ -309,14 +365,15 @@ fun PersonEditScreen(
                 .blur(if (isAnyModalOrDialogOpen) 12.dp else 0.dp),
             contentAlignment = Alignment.TopCenter
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .widthIn(max = 700.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
+            SelectionContainer {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .widthIn(max = 700.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
                 // SEÇÃO DE ENDEREÇO E UNIDADE (CONDOMÍNIOS / BLOCOS / APTOS)
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -396,6 +453,53 @@ fun PersonEditScreen(
                                 .testTag("person_address_input"),
                             singleLine = true
                         )
+
+                        // Sugestões de Ruas (Catálogo da Cidade)
+                        if (streetSuggestions.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(vertical = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                streetSuggestions.forEach { suggestion ->
+                                    SuggestionChip(
+                                        onClick = {
+                                            address = suggestion.nomeCompleto
+                                            if (neighborhood.isBlank() && suggestion.bairro.isNotBlank()) {
+                                                neighborhood = suggestion.bairro
+                                            }
+                                            streetSuggestions = emptyList()
+                                        },
+                                        label = {
+                                            Column {
+                                                Text(
+                                                    text = suggestion.nomeCompleto,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 12.sp
+                                                )
+                                                if (suggestion.bairro.isNotBlank()) {
+                                                    Text(
+                                                        text = suggestion.bairro,
+                                                        fontSize = 10.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        icon = {
+                                            Icon(
+                                                imageVector = Icons.Default.LocationCity,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                        }
 
                         // Linha com Número e Complemento / Unidade
                         Row(
@@ -644,11 +748,33 @@ fun PersonEditScreen(
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
                                         if (rec.documento.isNotBlank()) {
-                                            Text(
-                                                text = "Doc: ${rec.documento}",
-                                                fontSize = 12.sp,
-                                                color = Color.Gray
-                                            )
+                                            val rDigits = rec.documento.filter { it.isDigit() }
+                                            val isCpf = rDigits.length == 11
+                                            val isVerified = isCpf && com.example.data.remote.CpfVerificationTracker.isCpfVerified(rDigits)
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (isCpf) "CPF: ${rec.documento}" else "Doc: ${rec.documento}",
+                                                    fontSize = 12.sp,
+                                                    color = Color.Gray
+                                                )
+                                                if (isVerified) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        color = Color(0xFFE8F5E9)
+                                                    ) {
+                                                        Text(
+                                                            text = "✓ Verificado na API",
+                                                            fontSize = 9.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = Color(0xFF2E7D32),
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
@@ -707,7 +833,7 @@ fun PersonEditScreen(
                                                 if (recebedoresList.size > 1) {
                                                     recebedorToDelete = Pair(index, rec)
                                                 } else {
-                                                    Toast.makeText(context, "É necessário manter pelo menos um recebedor!", Toast.LENGTH_SHORT).show()
+                                                    ToastHelper.show(context, "É necessário manter pelo menos um recebedor!")
                                                 }
                                             },
                                             enabled = recebedoresList.size > 1,
@@ -747,13 +873,31 @@ fun PersonEditScreen(
 
                 Button(
                     onClick = {
-                        if (address.isBlank()) {
+                        val trimmedAddress = address.trim()
+                        if (trimmedAddress.isBlank()) {
                             addressError = true
+                            ToastHelper.show(context, "Informe o endereço completo (rua e número)!")
+                            return@Button
+                        }
+
+                        val parsedAddr = AddressNormalizer.parseAddressComponents(trimmedAddress, number.trim(), complement.trim(), neighborhood.trim())
+                        val finalStreet = if (parsedAddr.street.isNotBlank()) parsedAddr.street else trimmedAddress
+                        val finalNum = if (number.trim().isNotBlank()) number.trim() else parsedAddr.number
+
+                        val stripped = AddressNormalizer.stripStreetType(finalStreet)
+                        if (finalStreet.isBlank() || stripped.isBlank() || stripped.all { it.isDigit() || it == '-' || it == ',' || it == '.' }) {
+                            addressError = true
+                            ToastHelper.show(context, "Informe o nome da rua junto com o número!")
+                            return@Button
+                        }
+
+                        if (finalNum.isBlank()) {
+                            ToastHelper.show(context, "Informe o número do imóvel junto com o nome da rua!")
                             return@Button
                         }
 
                         if (recebedoresList.isEmpty()) {
-                            Toast.makeText(context, "Adicione pelo menos um recebedor!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Adicione pelo menos um recebedor!")
                             return@Button
                         }
 
@@ -762,14 +906,14 @@ fun PersonEditScreen(
                         }
                         val primaryRecebedor = formattedRecebedores.first()
                         if (primaryRecebedor.nome.isBlank()) {
-                            Toast.makeText(context, "O primeiro recebedor deve ter um nome válido!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "O primeiro recebedor deve ter um nome válido!")
                             return@Button
                         }
 
                         // Filtrar se algum recebedor ficou com o nome em branco
                         val invalid = formattedRecebedores.any { it.nome.isBlank() }
                         if (invalid) {
-                            Toast.makeText(context, "Todos os recebedores devem ter nomes preenchidos!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Todos os recebedores devem ter nomes preenchidos!")
                             return@Button
                         }
 
@@ -779,15 +923,9 @@ fun PersonEditScreen(
                             emptyList()
                         }
 
-                        val parsedAddr = if (number.isBlank()) {
-                            AddressNormalizer.parseAddressComponents(address, number, complement, neighborhood)
-                        } else null
-
-                        val finalStreet = if (parsedAddr != null && parsedAddr.street.isNotBlank()) parsedAddr.street else address.trim()
-                        val finalNum = if (parsedAddr != null && parsedAddr.number.isNotBlank()) parsedAddr.number else number.trim()
-                        val rawComp = if (parsedAddr != null && parsedAddr.complement.isNotBlank() && complement.isBlank()) parsedAddr.complement else complement.trim()
+                        val rawComp = if (parsedAddr.complement.isNotBlank() && complement.isBlank()) parsedAddr.complement else complement.trim()
                         val finalComp = AddressNormalizer.formatComplementToken(rawComp).ifBlank { rawComp }
-                        val finalBairro = if (parsedAddr != null && parsedAddr.neighborhood.isNotBlank() && neighborhood.isBlank()) parsedAddr.neighborhood else neighborhood.trim()
+                        val finalBairro = if (parsedAddr.neighborhood.isNotBlank() && neighborhood.isBlank()) parsedAddr.neighborhood else neighborhood.trim()
 
                         val person = Person(
                             id = personId,
@@ -806,8 +944,9 @@ fun PersonEditScreen(
 
                         val formDuration = android.os.SystemClock.elapsedRealtime() - screenOpenTime
                         viewModel.savePerson(person, durationMs = formDuration) {
+                            com.example.util.RecipientDraftManager.clearScreenDraft(context, personId)
                             FeedbackHelper.triggerSuccess(context)
-                            Toast.makeText(context, "Destinatário salvo com sucesso!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Destinatário salvo com sucesso!")
                             onNavigateBack()
                         }
                     },
@@ -824,6 +963,7 @@ fun PersonEditScreen(
                 }
             }
         }
+        }
     }
 
     // Diálogo de confirmação para remoção de recebedor dentro do endereço
@@ -838,8 +978,9 @@ fun PersonEditScreen(
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
                         text = "Deseja realmente remover este recebedor do endereço?",
                         fontSize = 14.sp
                     )
@@ -874,13 +1015,14 @@ fun PersonEditScreen(
                         fontWeight = FontWeight.Medium
                     )
                 }
-            },
+            }
+        },
             confirmButton = {
                 Button(
                     onClick = {
                         recebedoresList = recebedoresList.filterIndexed { i, _ -> i != targetIndex }
                         recebedorToDelete = null
-                        Toast.makeText(context, "Recebedor removido.", Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(context, "Recebedor removido.")
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
@@ -970,7 +1112,7 @@ fun PersonEditScreen(
                     editingRecebedor = editingRecebedor?.copy(assinatura = sigJson)
                     isSignatureModalOpen = false
                     signatureTargetId = null
-                    Toast.makeText(context, "Assinatura gravada!", Toast.LENGTH_SHORT).show()
+                    ToastHelper.show(context, "Assinatura gravada!")
                 },
                 onCancel = {
                     isSignatureModalOpen = false
@@ -1003,6 +1145,180 @@ fun RecebedorDialog(
     var isListeningDoc by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
+    val dialogScope = rememberCoroutineScope()
+    var isLookingUpCpfOnline by remember { mutableStateOf(false) }
+    var cpfLookupMessage by remember { mutableStateOf<String?>(null) }
+    var lastAutoLookedUpCpf by remember { mutableStateOf("") }
+    var savedRecipientFoundByName by remember { mutableStateOf<com.example.util.SavedRecipientInfo?>(null) }
+    var apiNameCorrectionSuggestion by remember { mutableStateOf<String?>(null) }
+    var officialApiName by remember { mutableStateOf<String?>(null) }
+
+    val performCpfLookup: (String) -> Unit = { rawDoc ->
+        val digits = rawDoc.filter { it.isDigit() }
+        if (digits.length == 11) {
+            isLookingUpCpfOnline = true
+            cpfLookupMessage = "Consultando CPF na API..."
+            dialogScope.launch(Dispatchers.IO) {
+                // 1º PRIORIDADE ABSOLUTA: Consulta direta na API oficial do CPF
+                val result = CpfLookupService.lookupCpf(digits)
+                val localSaved = com.example.util.SavedRecipientLookupHelper.findByDocument(rawDoc)
+
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    isLookingUpCpfOnline = false
+
+                    if (result.success && result.nome.isNotBlank()) {
+                        // API encontrou com sucesso -> Prioridade máxima para o nome oficial da API
+                        val apiNome = result.nome
+                        officialApiName = apiNome
+                        lastAutoLookedUpCpf = digits
+                        com.example.data.remote.CpfVerificationTracker.markCpfVerified(digits, apiNome)
+
+                        var pulledSig = false
+                        if (localAssinatura.isBlank() && localSaved != null && localSaved.assinatura.isNotBlank()) {
+                            localAssinatura = localSaved.assinatura
+                            pulledSig = true
+                        }
+
+                        val currentTyped = nome.trim()
+                        val isDiff = currentTyped.isNotBlank() &&
+                                com.example.util.AddressNormalizer.normalize(currentTyped) != com.example.util.AddressNormalizer.normalize(apiNome)
+
+                        if (isDiff) {
+                            apiNameCorrectionSuggestion = apiNome
+                            cpfLookupMessage = "⚠️ Divergência: Nome na API é '$apiNome'"
+                            ToastHelper.showLong(context, "Divergência com a base oficial! Sugestão disponível para correção.")
+                        } else {
+                            nome = apiNome
+                            nomeError = false
+                            apiNameCorrectionSuggestion = null
+                            cpfLookupMessage = buildString {
+                                append("✓ Nome obtido via API: $apiNome")
+                                if (pulledSig) append(" + Assinatura do banco")
+                            }
+                            ToastHelper.show(context, "Nome obtido pela API: $apiNome")
+                        }
+                    } else {
+                        // 2º PRIORIDADE: FALLBACK NO BANCO LOCAL (apenas se a API falhar ou não encontrar)
+                        if (localSaved != null && localSaved.nome.isNotBlank()) {
+                            nome = localSaved.nome
+                            nomeError = false
+                            lastAutoLookedUpCpf = digits
+                            var pulledSig = false
+                            if (localAssinatura.isBlank() && localSaved.assinatura.isNotBlank()) {
+                                localAssinatura = localSaved.assinatura
+                                pulledSig = true
+                            }
+                            cpfLookupMessage = buildString {
+                                append("✓ Puxado do banco local: ${localSaved.nome}")
+                                if (pulledSig) append(" + Assinatura")
+                            }
+                            ToastHelper.show(context, "Nome recuperado do banco local: ${localSaved.nome}")
+                        } else {
+                            val err = result.errorMessage ?: "CPF não localizado na API"
+                            cpfLookupMessage = "⚠️ $err"
+                            ToastHelper.show(context, err)
+                        }
+                    }
+                }
+            }
+        } else if (rawDoc.trim().length >= 5) {
+            // Documento com formato de RG (ou outro doc) -> Busca recebedor no banco local em background
+            dialogScope.launch(Dispatchers.IO) {
+                val localSaved = com.example.util.SavedRecipientLookupHelper.findByDocument(rawDoc)
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    if (localSaved != null && localSaved.nome.isNotBlank()) {
+                        nome = localSaved.nome
+                        nomeError = false
+                        lastAutoLookedUpCpf = rawDoc.trim()
+                        var pulledSig = false
+                        if (localAssinatura.isBlank() && localSaved.assinatura.isNotBlank()) {
+                            localAssinatura = localSaved.assinatura
+                            pulledSig = true
+                        }
+                        cpfLookupMessage = buildString {
+                            append("✓ Puxado do banco local via RG: ${localSaved.nome}")
+                            if (pulledSig) append(" + Assinatura")
+                        }
+                        ToastHelper.show(context, "Recebedor localizado no banco pelo RG!")
+                    }
+                }
+            }
+        } else {
+            ToastHelper.show(context, "Informe o documento para pesquisar")
+        }
+    }
+
+    // Ao abrir para editar recebedor que já possui CPF (ou quando o documento for carregado),
+    // consulta automaticamente a API para verificar se o nome cadastrado diverge do oficial
+    LaunchedEffect(recebedor.id, recebedor.documento) {
+        officialApiName = null
+        apiNameCorrectionSuggestion = null
+        cpfLookupMessage = null
+        lastAutoLookedUpCpf = ""
+        val digits = documento.filter { it.isDigit() }
+        if (digits.length == 11) {
+            performCpfLookup(digits)
+        }
+    }
+
+    // Mantém a sugestão de correção ativa apenas enquanto o documento corresponder exatamente ao CPF consultado
+    LaunchedEffect(nome, officialApiName, documento) {
+        val currentCpfDigits = documento.filter { it.isDigit() }
+        val offName = officialApiName
+        if (offName != null && offName.isNotBlank() && currentCpfDigits == lastAutoLookedUpCpf && currentCpfDigits.length == 11) {
+            val isDiff = nome.trim().isNotBlank() &&
+                    com.example.util.AddressNormalizer.normalize(nome.trim()) != com.example.util.AddressNormalizer.normalize(offName)
+            if (isDiff) {
+                apiNameCorrectionSuggestion = offName
+                cpfLookupMessage = "⚠️ Divergência: Nome na API é '$offName'"
+            } else {
+                apiNameCorrectionSuggestion = null
+                if (nome.trim().isNotBlank()) {
+                    cpfLookupMessage = "✓ Nome verificado na API: $offName"
+                }
+            }
+        } else {
+            apiNameCorrectionSuggestion = null
+            if (currentCpfDigits != lastAutoLookedUpCpf) {
+                officialApiName = null
+                if (cpfLookupMessage?.startsWith("✓") == true || cpfLookupMessage?.startsWith("⚠️") == true) {
+                    cpfLookupMessage = null
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(nome) {
+        val q = nome.trim()
+        // Evita disparar busca redundante e congelamento quando o documento já foi informado/encontrado
+        if (q.length >= 3 && documento.isBlank() && lastAutoLookedUpCpf.isBlank()) {
+            delay(350)
+            try {
+                val match = com.example.util.SavedRecipientLookupHelper.findByName(q)
+                if (match != null && (match.documento.isNotBlank() || match.assinatura.isNotBlank())) {
+                    savedRecipientFoundByName = match
+                    val isExact = com.example.util.AddressNormalizer.normalize(match.nome) == com.example.util.AddressNormalizer.normalize(q)
+                    if (isExact) {
+                        if (documento.isBlank() && match.documento.isNotBlank()) {
+                            documento = match.documento
+                        }
+                        if (localAssinatura.isBlank() && match.assinatura.isNotBlank()) {
+                            localAssinatura = match.assinatura
+                        }
+                    }
+                } else {
+                    savedRecipientFoundByName = null
+                }
+            } catch (_: Throwable) {
+                savedRecipientFoundByName = null
+            }
+        } else if (documento.isNotBlank()) {
+            savedRecipientFoundByName = null
+        } else {
+            savedRecipientFoundByName = null
+        }
+    }
+
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -1010,7 +1326,7 @@ fun RecebedorDialog(
         if (isGranted) {
             pendingAction?.invoke()
         } else {
-            Toast.makeText(context, "Permissão de microfone necessária para comando de voz.", Toast.LENGTH_SHORT).show()
+            ToastHelper.show(context, "Permissão de microfone necessária para comando de voz.")
         }
         pendingAction = null
     }
@@ -1152,15 +1468,19 @@ fun RecebedorDialog(
             )
         },
         text = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            SelectionContainer {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                 OutlinedTextField(
                     value = nome,
                     onValueChange = {
                         nome = it
                         nomeError = it.isBlank()
+                        if (apiNameCorrectionSuggestion != null && it.trim().equals(apiNameCorrectionSuggestion!!.trim(), ignoreCase = true)) {
+                            apiNameCorrectionSuggestion = null
+                        }
                     },
                     label = { Text("Nome do Recebedor *") },
                     placeholder = { Text("Ex: Maria da Silva") },
@@ -1175,7 +1495,7 @@ fun RecebedorDialog(
                                         isListeningName = true
                                         com.example.util.SpeechHelper.startListening(
                                             context = context,
-                                            onReady = { Toast.makeText(context, "Fale o nome...", Toast.LENGTH_SHORT).show() },
+                                            onReady = { ToastHelper.show(context, "Fale o nome...") },
                                             onResult = { result ->
                                                 isListeningName = false
                                                 val processed = com.example.util.SpeechHelper.processSpokenName(result)
@@ -1186,7 +1506,7 @@ fun RecebedorDialog(
                                             },
                                             onError = { err ->
                                                 isListeningName = false
-                                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                                ToastHelper.show(context, err)
                                             }
                                         )
                                     }
@@ -1204,14 +1524,131 @@ fun RecebedorDialog(
                     singleLine = true
                 )
 
+                if (apiNameCorrectionSuggestion != null) {
+                    val officialName = apiNameCorrectionSuggestion!!
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFFFF8E1),
+                        border = BorderStroke(1.dp, Color(0xFFFFB300)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                nome = officialName
+                                nomeError = false
+                                apiNameCorrectionSuggestion = null
+                                ToastHelper.show(context, "Nome corrigido para o oficial!")
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFE65100), modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "⚠️ Divergência com a base oficial da API",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFB71C1C)
+                                )
+                                Text(
+                                    text = "Cadastrado / Digitado: '${nome}'",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF5D4037)
+                                )
+                                Text(
+                                    text = "Oficial na API: '${officialName}'",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF1B5E20)
+                                )
+                                Text(
+                                    text = "👉 Toque aqui para corrigir para o nome oficial",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFE65100)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (savedRecipientFoundByName != null) {
+                    val match = savedRecipientFoundByName!!
+                    val hasDoc = match.documento.isNotBlank()
+                    val hasSig = match.assinatura.isNotBlank()
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFE8F5E9),
+                        border = BorderStroke(1.dp, Color(0xFFA5D6A7)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                nome = match.nome
+                                nomeError = false
+                                if (hasDoc) {
+                                    documento = match.documento
+                                }
+                                if (hasSig) {
+                                    localAssinatura = match.assinatura
+                                }
+                                savedRecipientFoundByName = null
+                                ToastHelper.show(context, "Dados recuperados do banco!")
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Recebedor salvo: ${match.nome}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF1B5E20)
+                                )
+                                Text(
+                                    text = buildString {
+                                        if (hasDoc) append("Doc: ${match.documento} ")
+                                        if (hasSig) append("• ✓ Assinatura disponível ")
+                                        append("(Toque para puxar)")
+                                    },
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF2E7D32)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                com.example.ui.components.CpfApiQuotaCard()
+
                 val isDocValidState = remember(documento) {
                     if (documento.isBlank()) null else com.example.util.SpeechHelper.isValidDocument(documento)
                 }
 
                 OutlinedTextField(
                     value = documento,
-                    onValueChange = { documento = it },
+                    onValueChange = { input ->
+                        val filtered = input.filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '/' || it == ' ' }.uppercase(java.util.Locale.ROOT)
+                        documento = filtered
+                        val digits = filtered.filter { it.isDigit() }
+                        // Prioridade máxima da API: pesquisa automaticamente assim que atinge 11 dígitos de CPF
+                        if (digits.length == 11 && digits != lastAutoLookedUpCpf) {
+                            performCpfLookup(digits)
+                        } else if (filtered.any { it.isLetter() } && filtered.length >= 6 && filtered != lastAutoLookedUpCpf) {
+                            // Documento com letras (ex: RG com sigla estadual MG-12345678)
+                            performCpfLookup(filtered)
+                        }
+                    },
                     label = { Text("Documento (CPF / RG)") },
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Characters,
+                        keyboardType = KeyboardType.Text
+                    ),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = when (isDocValidState) {
                             true -> Color(0xFF2E7D32)
@@ -1225,42 +1662,87 @@ fun RecebedorDialog(
                         }
                     ),
                     supportingText = {
-                        when (isDocValidState) {
-                            true -> Text("Documento válido", color = Color(0xFF2E7D32), fontSize = 11.sp)
-                            false -> Text("Documento inválido", color = Color(0xFFD32F2F), fontSize = 11.sp)
-                            null -> null
+                        if (cpfLookupMessage != null) {
+                            Text(
+                                text = cpfLookupMessage!!,
+                                color = if (cpfLookupMessage!!.startsWith("✓")) Color(0xFF2E7D32) else Color(0xFFD32F2F),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        } else {
+                            val formDocDigits = documento.filter { it.isDigit() }
+                            if (formDocDigits.length == 11 && com.example.data.remote.CpfVerificationTracker.isCpfVerified(formDocDigits)) {
+                                Text("✓ CPF verificado e validado na base oficial da API", color = Color(0xFF2E7D32), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                            } else {
+                                when (isDocValidState) {
+                                    true -> Text("Documento válido", color = Color(0xFF2E7D32), fontSize = 11.sp)
+                                    false -> Text("Documento inválido", color = Color(0xFFD32F2F), fontSize = 11.sp)
+                                    null -> null
+                                }
+                            }
                         }
                     },
                     trailingIcon = {
-                        IconButton(
-                            onClick = {
-                                if (!isListeningDoc) {
-                                    runWithMicPermission {
-                                        isListeningDoc = true
-                                        com.example.util.SpeechHelper.startListening(
-                                            context = context,
-                                            onReady = { Toast.makeText(context, "Fale os números do documento...", Toast.LENGTH_SHORT).show() },
-                                            onResult = { result ->
-                                                isListeningDoc = false
-                                                val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
-                                                if (processed.isNotBlank()) {
-                                                    documento = processed
-                                                }
-                                            },
-                                            onError = { err ->
-                                                isListeningDoc = false
-                                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
-                                            }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (isLookingUpCpfOnline) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp).padding(end = 4.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else {
+                                val digits = documento.filter { it.isDigit() }
+                                if (digits.length == 11 || documento.trim().length >= 5) {
+                                    IconButton(
+                                        onClick = { performCpfLookup(documento) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = "Consultar Documento",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }
                             }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Mic,
-                                contentDescription = "Falar Documento",
-                                tint = if (isListeningDoc) MaterialTheme.colorScheme.primary else Color.Gray
-                            )
+                            IconButton(
+                                onClick = {
+                                    if (!isListeningDoc) {
+                                        runWithMicPermission {
+                                            isListeningDoc = true
+                                            com.example.util.SpeechHelper.startListening(
+                                                context = context,
+                                                onReady = { ToastHelper.show(context, "Fale os números do documento...") },
+                                                onResult = { result ->
+                                                    isListeningDoc = false
+                                                    val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
+                                                    if (processed.isNotBlank()) {
+                                                        val upper = processed.uppercase(java.util.Locale.ROOT)
+                                                        documento = upper
+                                                        val digits = upper.filter { it.isDigit() }
+                                                        if (digits.length == 11 && digits != lastAutoLookedUpCpf) {
+                                                            performCpfLookup(digits)
+                                                        }
+                                                    }
+                                                },
+                                                onError = { err ->
+                                                    isListeningDoc = false
+                                                    ToastHelper.show(context, err)
+                                                }
+                                            )
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Falar Documento",
+                                    tint = if (isListeningDoc) MaterialTheme.colorScheme.primary else Color.Gray,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
@@ -1340,7 +1822,7 @@ fun RecebedorDialog(
                             if (documento.isNotBlank()) append("\nDocumento: ").append(documento)
                         }
                         com.example.util.ClipboardHelper.copyToClipboard(context, "Morador", textToCopy)
-                        Toast.makeText(context, "Dados do morador copiados!", Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(context, "Dados do morador copiados!")
                     },
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -1371,7 +1853,8 @@ fun RecebedorDialog(
                     }
                 }
             }
-        },
+        }
+    },
         confirmButton = {
             Button(
                 onClick = {
@@ -1648,7 +2131,7 @@ fun MoveOrCopyReceiverDialog(
                         onComplete = {
                             FeedbackHelper.triggerSuccess(context)
                             val actionText = if (isMove) "movido" else "copiado"
-                            Toast.makeText(context, "Morador $actionText com sucesso!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Morador $actionText com sucesso!")
                             onSuccess(isMove)
                         }
                     )

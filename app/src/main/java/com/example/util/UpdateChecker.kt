@@ -1,5 +1,7 @@
 package com.example.util
 
+import com.example.util.ToastHelper
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -241,11 +243,7 @@ object UpdateChecker {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!context.packageManager.canRequestPackageInstalls()) {
-                    Toast.makeText(
-                        context,
-                        "Por favor, autorize a instalação de fontes desconhecidas para atualizar",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    ToastHelper.showLong(context, "Por favor, autorize a instalação de fontes desconhecidas para atualizar")
                     val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
                         data = Uri.parse("package:${context.packageName}")
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -268,7 +266,7 @@ object UpdateChecker {
             }
             context.startActivity(installIntent)
         } catch (e: Exception) {
-            Toast.makeText(context, "Erro ao iniciar instalador: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            ToastHelper.showLong(context, "Erro ao iniciar instalador: ${e.localizedMessage}")
         }
     }
 }

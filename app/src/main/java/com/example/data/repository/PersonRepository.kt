@@ -18,7 +18,7 @@ interface PersonRepository {
     suspend fun countPersons(): Int
     suspend fun cleanupInactiveReceiversOlderThan5Years(): Int
     suspend fun markPersonUsed(id: Long)
-    suspend fun prioritizeRecebedor(personId: Long, recebedorId: String): Person?
+    suspend fun prioritizeRecebedor(personId: Long, recebedorId: String, recebedorNome: String? = null): Person?
     suspend fun consolidateDuplicateAddressPersons(): Int
     suspend fun sanitizeCorruptedAddressRecords(): Int
     suspend fun moveOrCopyReceiver(

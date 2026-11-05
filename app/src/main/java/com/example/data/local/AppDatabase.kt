@@ -9,17 +9,19 @@ import androidx.room.migration.Migration
 import com.example.data.local.dao.ActivityReportDao
 import com.example.data.local.dao.DeliveryDao
 import com.example.data.local.dao.PersonDao
+import com.example.data.local.dao.StreetCatalogDao
 import com.example.data.local.entity.AppActionLog
 import com.example.data.local.entity.DailyActivitySummary
 import com.example.data.local.entity.Delivery
 import com.example.data.local.entity.Person
+import com.example.data.local.entity.StreetCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 @Database(
-    entities = [Person::class, Delivery::class, DailyActivitySummary::class, AppActionLog::class],
-    version = 5,
+    entities = [Person::class, Delivery::class, DailyActivitySummary::class, AppActionLog::class, StreetCatalog::class],
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -27,6 +29,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun personDao(): PersonDao
     abstract fun deliveryDao(): DeliveryDao
     abstract fun activityReportDao(): ActivityReportDao
+    abstract fun streetCatalogDao(): StreetCatalogDao
 
     companion object {
         @Volatile
@@ -81,6 +84,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `catalogo_ruas` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `nome` TEXT NOT NULL,
+                        `tipo` TEXT NOT NULL,
+                        `bairro` TEXT NOT NULL,
+                        `cidade` TEXT NOT NULL,
+                        `uf` TEXT NOT NULL,
+                        `cep` TEXT NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_catalogo_ruas_cidade_uf` ON `catalogo_ruas` (`cidade`, `uf`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_catalogo_ruas_nome` ON `catalogo_ruas` (`nome`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_catalogo_ruas_bairro` ON `catalogo_ruas` (`bairro`)")
+            }
+        }
+
         fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -88,7 +110,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "assistente_entregas.db"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .addCallback(DatabaseCallback(scope))
                     .fallbackToDestructiveMigration()
                     .build()
@@ -104,13 +126,26 @@ abstract class AppDatabase : RoomDatabase() {
                 super.onCreate(db)
                 INSTANCE?.let { database ->
                     scope.launch(Dispatchers.IO) {
-                        populateInitialData(database.personDao(), database.deliveryDao())
+                        populateInitialData(database.personDao(), database.deliveryDao(), database.streetCatalogDao())
+                    }
+                }
+            }
+            override fun onOpen(db: SupportSQLiteDatabase) {
+                super.onOpen(db)
+                INSTANCE?.let { database ->
+                    scope.launch(Dispatchers.IO) {
+                        if (database.streetCatalogDao().countAllStreets() == 0) {
+                            database.streetCatalogDao().insertAll(MonteSantoStreetData.getInitialStreets())
+                        }
                     }
                 }
             }
         }
 
-        private suspend fun populateInitialData(personDao: PersonDao, deliveryDao: DeliveryDao) {
+        private suspend fun populateInitialData(personDao: PersonDao, deliveryDao: DeliveryDao, streetCatalogDao: StreetCatalogDao) {
+            if (streetCatalogDao.countAllStreets() == 0) {
+                streetCatalogDao.insertAll(MonteSantoStreetData.getInitialStreets())
+            }
             if (personDao.countPersons() > 0) return
 
             val samplePersons = listOf(

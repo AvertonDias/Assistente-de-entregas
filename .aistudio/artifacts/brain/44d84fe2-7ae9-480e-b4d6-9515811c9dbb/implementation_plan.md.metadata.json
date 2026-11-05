@@ -1,0 +1,6 @@
+{
+  "summary": "Plano de implementação para a nova tela de abertura (Splash Screen) com a logo animada do aplicativo e verificação de autenticação antes de redirecionar para a tela principal (Home) ou de Login.",
+  "updatedAt": "2026-10-16T11:39:54.123418269Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

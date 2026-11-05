@@ -18,6 +18,7 @@ import com.example.data.model.Point
 import com.example.data.repository.PersonRepository
 import com.example.data.repository.SettingsRepository
 import com.example.util.AddressNormalizer
+import com.example.util.ToastHelper
 import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -147,7 +148,7 @@ object AccessibilityAutomationEngine {
      * Chamado quando o usuário clica ou seleciona um item na tela (ex: marca um checkbox em 'Seleção' ou clica em uma entrega)
      */
     fun onNodeClickedOrSelected(packageName: String, className: String, node: AccessibilityNodeInfo) {
-        if (isModalActive || _state.value.isPausedScanning) return
+        if (isModalActive || _state.value.isPausedScanning || _state.value.detectedAddressText.isNotBlank()) return
         val myPkg = activeService?.packageName ?: ""
         if (packageName == myPkg) return
 
@@ -312,8 +313,9 @@ object AccessibilityAutomationEngine {
             return
         }
 
-        // Se o usuário escolheu ou travou manualmente um morador/endereço, não sobrescreve automaticamente
-        if (_state.value.isAddressLocked && _state.value.detectedAddressText.isNotBlank()) {
+        // O balão só atualiza o endereço 3 segundos depois que termina a assinatura ou se apertar o botão atualizar no balão.
+        // Ele não atualiza em outros momentos automaticamente.
+        if (_state.value.detectedAddressText.isNotBlank()) {
             return
         }
 
@@ -373,14 +375,14 @@ object AccessibilityAutomationEngine {
         )
     }
 
-    fun resetAndClearAfterSignature(delayBeforeResumeMs: Long = 5000L) {
+    fun resetAndClearAfterSignature(delayBeforeResumeMs: Long = 3000L) {
         scanJob?.cancel()
         lastScannedHash = 0
         lastScannedCheapHash = 0
         cachedRootNode = null
         lastLoggedAddress = ""
         isCurrentlyScanning = false
-        // Limpa o balão imediatamente e pausa o escaneamento durante o atraso
+        // Limpa o balão imediatamente e pausa o escaneamento durante o atraso de 3 segundos
         _state.value = _state.value.copy(
             detectedAddressText = "",
             isAddressLocked = false,
@@ -393,10 +395,10 @@ object AccessibilityAutomationEngine {
             selectedComplement = null,
             selectedRecebedor = null,
             availableRecebedores = emptyList(),
-            logs = addLog("Assinatura concluída. Balão limpo! Pronto para pesquisar o próximo endereço...", true)
+            logs = addLog("Assinatura concluída. Balão limpo! Atualizando próximo endereço em 3 segundos...", true)
         )
 
-        // Reativa a detecção/pesquisa após intervalo de 5 segundos
+        // Reativa a detecção/pesquisa após intervalo de 3 segundos
         scope.launch {
             kotlinx.coroutines.delay(delayBeforeResumeMs)
             lastScannedHash = 0
@@ -406,7 +408,7 @@ object AccessibilityAutomationEngine {
                 isPausedScanning = false,
                 isAddressLocked = false,
                 isScanning = true,
-                logs = addLog("Detecção ativada. Pronto para escanear a próxima entrega!", true)
+                logs = addLog("3 segundos decorridos: Atualizando endereço da tela...", true)
             )
             rescanCurrentScreen(forceUnlock = true)
         }
@@ -667,23 +669,25 @@ object AccessibilityAutomationEngine {
         val hasDetectedNumber = parsedDetected.number.isNotBlank() || allNumbers.isNotEmpty()
         val detectedNumber = parsedDetected.number.ifBlank { allNumbers.firstOrNull() ?: "" }
 
-        // Se o endereço detectado na tela possui número específico, NUNCA trazer pessoas de outros números!
+        // OBRIGATÓRIO: O endereço detectado DEVE bater a rua E o número juntos!
+        val queryStreet = parsedDetected.street.ifBlank { detectedAddress }
         val numberMatched = if (hasDetectedNumber && detectedNumber.isNotBlank()) {
             rawMatched.filter { p ->
                 val pNum = p.numero.trim()
                 val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
                 val targetNum = pNum.ifBlank { parsedP.number }
-                targetNum.isNotBlank() && AddressNormalizer.areNumbersMatching(detectedNumber, targetNum)
+                val numMatches = targetNum.isNotBlank() && AddressNormalizer.areNumbersMatching(detectedNumber, targetNum)
+                val streetMatches = AddressNormalizer.areStreetNamesMatching(queryStreet, p.endereco)
+                numMatches && streetMatches
             }
         } else {
-            // Se o endereço na tela não tem número mas temos candidatos cadastrados:
-            // Só considera match direto se todos os candidatos pertencerem à mesma casa/número
+            // Se o endereço na tela não tem número, só considera se a rua bater e houver no máximo 1 número cadastrado
             val distinctNumbers = rawMatched.map { it.numero.trim() }.filter { it.isNotBlank() }.distinct()
             if (distinctNumbers.size <= 1) {
-                rawMatched
+                rawMatched.filter { p ->
+                    AddressNormalizer.areStreetNamesMatching(queryStreet, p.endereco)
+                }
             } else {
-                // Múltiplos números diferentes cadastrados na rua:
-                // Não assume nenhum como correspondente automático para não misturar moradores de casas diferentes
                 emptyList()
             }
         }
@@ -764,7 +768,7 @@ object AccessibilityAutomationEngine {
                 withContext(Dispatchers.Main) {
                     try {
                         val status = if (matched.isNotEmpty()) "Destinatário encontrado!" else "Endereço pronto para salvar"
-                        Toast.makeText(service, "✓ $finalDetectedAddress\n$status", Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(service, "✓ $finalDetectedAddress\n$status")
                     } catch (_: Exception) {}
                 }
             }
@@ -1499,20 +1503,52 @@ object AccessibilityAutomationEngine {
         } else {
             _state.value.matchedPerson
         }
+
+        // Coloca o recebedor selecionado IMEDIATAMENTE no primeiro lugar da lista (0 ms)
+        val currentRecs = _state.value.availableRecebedores
+        val reorderedImmediate = if (currentRecs.isNotEmpty()) {
+            listOf(recebedor) + currentRecs.filterNot { it.id == recebedor.id }
+        } else {
+            listOf(recebedor)
+        }
+
         _state.value = _state.value.copy(
             selectedRecebedor = recebedor,
-            matchedPerson = targetPerson
+            matchedPerson = targetPerson,
+            availableRecebedores = reorderedImmediate
         )
+
+        prioritizeRecebedor(recebedor)
     }
 
     fun prioritizeRecebedor(recebedor: Recebedor) {
+        val currentRecs = _state.value.availableRecebedores
+        val reorderedImmediate = if (currentRecs.isNotEmpty()) {
+            listOf(recebedor) + currentRecs.filterNot { it.id == recebedor.id }
+        } else {
+            listOf(recebedor)
+        }
+
         val personId = recebedor.id.removePrefix("p_").substringBefore("_").toLongOrNull()
             ?: _state.value.matchedPerson?.id
-            ?: return
+
+        val targetPerson = if (personId != null) {
+            _state.value.candidatePersons.firstOrNull { it.id == personId } ?: _state.value.matchedPerson
+        } else {
+            _state.value.matchedPerson
+        }
+
+        _state.value = _state.value.copy(
+            selectedRecebedor = recebedor,
+            matchedPerson = targetPerson,
+            availableRecebedores = reorderedImmediate
+        )
+
+        if (personId == null) return
 
         scope.launch {
             val repo = personRepository ?: return@launch
-            val updated = repo.prioritizeRecebedor(personId, recebedor.id)
+            val updated = repo.prioritizeRecebedor(personId, recebedor.id, recebedor.nome)
             if (updated != null) {
                 val currentCandidates = _state.value.candidatePersons
                 val newCandidates = if (currentCandidates.isNotEmpty()) {
@@ -1520,36 +1556,119 @@ object AccessibilityAutomationEngine {
                     if (updatedList.none { it.id == updated.id }) {
                         listOf(updated) + updatedList
                     } else {
-                        updatedList.sortedByDescending { it.id == updated.id }
+                        listOf(updated) + updatedList.filterNot { it.id == updated.id }
                     }
                 } else {
                     listOf(updated)
                 }
+
                 val allRecs = extractAllRecebedores(newCandidates)
                 val newSelected = allRecs.firstOrNull { it.id == "p_${updated.id}_main" }
                     ?: allRecs.firstOrNull { it.nome.equals(recebedor.nome, ignoreCase = true) }
-                    ?: allRecs.firstOrNull()
+                    ?: recebedor
+
+                val prioritizedFinalRecs = listOf(newSelected) + allRecs.filterNot { it.id == newSelected.id }
+
+                val housePersons = _state.value.allHousePersons
+                val updatedHousePersons = if (housePersons.any { it.id == updated.id }) {
+                    listOf(updated) + housePersons.filterNot { it.id == updated.id }
+                } else {
+                    housePersons
+                }
 
                 _state.value = _state.value.copy(
                     matchedPerson = updated,
                     candidatePersons = newCandidates,
-                    availableRecebedores = allRecs,
+                    allHousePersons = updatedHousePersons,
+                    availableRecebedores = prioritizedFinalRecs,
                     selectedRecebedor = newSelected
                 )
             }
+            com.example.util.SavedRecipientLookupHelper.invalidateCache()
+        }
+    }
+
+    fun selectAddressGroup(
+        street: String,
+        number: String,
+        neighborhood: String,
+        allHousePersons: List<Person>,
+        initialComplement: String? = null
+    ) {
+        scope.launch {
+            val cleanStreet = street.trim()
+            val cleanNum = number.trim()
+            val cleanNeigh = neighborhood.trim()
+
+            val displayAddr = buildString {
+                if (cleanStreet.isNotBlank()) append(cleanStreet)
+                if (cleanNum.isNotBlank()) {
+                    if (isNotEmpty()) append(", ")
+                    append(cleanNum)
+                }
+                if (cleanNeigh.isNotBlank()) {
+                    if (isNotEmpty()) append(" - ")
+                    append(cleanNeigh)
+                }
+            }.ifBlank { "Endereço selecionado" }
+
+            val distinctComps = allHousePersons
+                .map { it.complemento.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+
+            val activeComp = initialComplement?.trim()?.ifBlank { distinctComps.firstOrNull() }
+                ?: distinctComps.firstOrNull()
+
+            val filteredPersons = if (activeComp != null && activeComp.isNotBlank()) {
+                val compFiltered = allHousePersons.filter { p ->
+                    val pComp = p.complemento.trim()
+                    val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
+                    val targetComp = pComp.ifBlank { parsedP.complement }
+                    targetComp.isNotBlank() && (
+                        AddressNormalizer.normalize(targetComp) == AddressNormalizer.normalize(activeComp) ||
+                        (AddressNormalizer.extractComplement(targetComp).isNotBlank() &&
+                         AddressNormalizer.extractComplement(targetComp) == AddressNormalizer.extractComplement(activeComp))
+                    )
+                }
+                if (compFiltered.isNotEmpty()) compFiltered else allHousePersons
+            } else {
+                allHousePersons
+            }
+
+            val recebedores = extractAllRecebedores(filteredPersons)
+            val selectedRec = recebedores.firstOrNull()
+
+            _state.value = _state.value.copy(
+                detectedAddressText = displayAddr,
+                isAddressLocked = true,
+                matchedPerson = filteredPersons.firstOrNull(),
+                candidatePersons = filteredPersons,
+                allHousePersons = allHousePersons,
+                availableComplements = distinctComps,
+                selectedComplement = activeComp,
+                availableRecebedores = recebedores,
+                selectedRecebedor = selectedRec,
+                logs = addLog("Endereço selecionado com ${distinctComps.size} complemento(s): $displayAddr", true)
+            )
         }
     }
 
     fun setMatchedPersonDirect(person: Person) {
         scope.launch {
             val repo = personRepository
-            val fullAddr = buildString {
+            val baseAddr = buildString {
                 append(person.endereco)
                 if (person.numero.isNotBlank()) append(", ${person.numero}")
+            }.trim()
+            val fullAddrWithComp = buildString {
+                append(baseAddr)
                 if (person.complemento.isNotBlank()) append(" - ${person.complemento}")
             }.trim()
-            val addressToSet = fullAddr.ifBlank { _state.value.detectedAddressText }
-            val matched = if (addressToSet.isNotBlank() && repo != null) {
+
+            val addressToSet = baseAddr.ifBlank { person.endereco.ifBlank { _state.value.detectedAddressText } }
+
+            val housePersons = if (addressToSet.isNotBlank() && repo != null) {
                 val found = repo.findPersonsByAddress(addressToSet)
                 val updatedFound = found.map { if (it.id == person.id) person else it }
                 if (updatedFound.none { it.id == person.id }) {
@@ -1560,22 +1679,150 @@ object AccessibilityAutomationEngine {
             } else {
                 listOf(person)
             }
-            val recebedores = extractAllRecebedores(matched)
-            val selected = recebedores.firstOrNull { it.id == "p_${person.id}_main" }
+
+            val distinctComps = housePersons
+                .map { it.complemento.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+
+            val targetComp = person.complemento.trim().ifBlank { distinctComps.firstOrNull() }
+
+            val filteredPersons = if (targetComp != null && targetComp.isNotBlank()) {
+                val compFiltered = housePersons.filter { p ->
+                    val pComp = p.complemento.trim()
+                    val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
+                    val tc = pComp.ifBlank { parsedP.complement }
+                    tc.isNotBlank() && (
+                        AddressNormalizer.normalize(tc) == AddressNormalizer.normalize(targetComp) ||
+                        (AddressNormalizer.extractComplement(tc).isNotBlank() &&
+                         AddressNormalizer.extractComplement(tc) == AddressNormalizer.extractComplement(targetComp))
+                    )
+                }
+                if (compFiltered.isNotEmpty()) compFiltered else housePersons
+            } else {
+                housePersons
+            }
+
+            val recebedores = extractAllRecebedores(filteredPersons)
+            val selectedRec = recebedores.firstOrNull { it.id == "p_${person.id}_main" }
                 ?: recebedores.firstOrNull { it.id.startsWith("p_${person.id}") }
                 ?: recebedores.firstOrNull()
-            val distinctComps = matched.map { it.complemento.trim() }.filter { it.isNotBlank() }.distinct()
+
             _state.value = _state.value.copy(
-                detectedAddressText = addressToSet,
+                detectedAddressText = fullAddrWithComp.ifBlank { addressToSet },
                 isAddressLocked = true,
                 matchedPerson = person,
-                candidatePersons = matched,
-                allHousePersons = matched,
+                candidatePersons = filteredPersons,
+                allHousePersons = housePersons,
                 availableComplements = distinctComps,
-                selectedComplement = person.complemento.trim().ifBlank { distinctComps.firstOrNull() },
+                selectedComplement = targetComp,
                 availableRecebedores = recebedores,
-                selectedRecebedor = selected,
-                logs = addLog("Destinatário selecionado manualmente: ${person.nome} (${addressToSet.ifBlank { "Sem endereço" }})", true)
+                selectedRecebedor = selectedRec,
+                logs = addLog("Destinatário selecionado manualmente: ${person.nome} (${fullAddrWithComp.ifBlank { "Sem endereço" }})", true)
+            )
+        }
+    }
+
+    fun notifyPersonSaved(savedPerson: Person, targetReceiverId: String? = null) {
+        val baseAddr = buildString {
+            append(savedPerson.endereco)
+            if (savedPerson.numero.isNotBlank()) append(", ${savedPerson.numero}")
+        }.trim()
+        val fullAddrWithComp = buildString {
+            append(baseAddr)
+            if (savedPerson.complemento.isNotBlank()) append(" - ${savedPerson.complemento}")
+        }.trim()
+        val addressToSet = fullAddrWithComp.ifBlank { baseAddr.ifBlank { savedPerson.endereco } }
+
+        val immediateRecebedores = extractAllRecebedores(listOf(savedPerson))
+        val targetRec = if (targetReceiverId != null) {
+            immediateRecebedores.firstOrNull { it.id == targetReceiverId || it.id == "p_${savedPerson.id}_co_$targetReceiverId" }
+                ?: immediateRecebedores.firstOrNull { it.nome.equals(savedPerson.nome, ignoreCase = true) }
+                ?: immediateRecebedores.firstOrNull()
+        } else {
+            immediateRecebedores.firstOrNull { it.id == "p_${savedPerson.id}_main" } ?: immediateRecebedores.firstOrNull()
+        }
+
+        // Garante que o recebedor recém-salvo fique como o PRIMEIRO da lista para assinar
+        val prioritizedImmediateRecs = if (targetRec != null) {
+            listOf(targetRec) + immediateRecebedores.filterNot { it.id == targetRec.id }
+        } else {
+            immediateRecebedores
+        }
+
+        // Atualização IMEDIATA no StateFlow para que o balão reflita instantaneamente os novos dados
+        _state.value = _state.value.copy(
+            detectedAddressText = addressToSet,
+            isAddressLocked = true,
+            matchedPerson = savedPerson,
+            candidatePersons = listOf(savedPerson),
+            allHousePersons = listOf(savedPerson),
+            availableComplements = if (savedPerson.complemento.isNotBlank()) listOf(savedPerson.complemento.trim()) else emptyList(),
+            selectedComplement = savedPerson.complemento.trim().takeIf { it.isNotBlank() },
+            availableRecebedores = prioritizedImmediateRecs,
+            selectedRecebedor = targetRec,
+            logs = addLog("Cadastro salvo com sucesso: ${targetRec?.nome ?: savedPerson.nome} ($addressToSet)", true)
+        )
+
+        com.example.util.SavedRecipientLookupHelper.invalidateCache()
+
+        scope.launch {
+            val repo = personRepository ?: return@launch
+            val searchKey = baseAddr.ifBlank { savedPerson.endereco }
+            if (searchKey.isBlank()) return@launch
+            val found = repo.findPersonsByAddress(searchKey)
+            val updatedFound = found.map { if (it.id == savedPerson.id) savedPerson else it }
+            val housePersons = if (updatedFound.none { it.id == savedPerson.id }) {
+                listOf(savedPerson) + updatedFound
+            } else {
+                updatedFound.sortedByDescending { it.id == savedPerson.id }
+            }
+
+            val distinctComps = housePersons
+                .map { it.complemento.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+
+            val targetComp = savedPerson.complemento.trim().ifBlank { distinctComps.firstOrNull() }
+            val filteredPersons = if (targetComp != null && targetComp.isNotBlank()) {
+                val compFiltered = housePersons.filter { p ->
+                    val pComp = p.complemento.trim()
+                    val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
+                    val tc = pComp.ifBlank { parsedP.complement }
+                    tc.isNotBlank() && (
+                        AddressNormalizer.normalize(tc) == AddressNormalizer.normalize(targetComp) ||
+                        (AddressNormalizer.extractComplement(tc).isNotBlank() &&
+                         AddressNormalizer.extractComplement(tc) == AddressNormalizer.extractComplement(targetComp))
+                    )
+                }
+                if (compFiltered.isNotEmpty()) compFiltered else housePersons
+            } else {
+                housePersons
+            }
+
+            val fullRecebedores = extractAllRecebedores(filteredPersons)
+            val preservedSelectedRec = if (targetRec != null) {
+                fullRecebedores.firstOrNull { it.id == targetRec.id }
+                    ?: fullRecebedores.firstOrNull { it.nome.equals(targetRec.nome, ignoreCase = true) }
+                    ?: targetRec
+            } else {
+                fullRecebedores.firstOrNull()
+            }
+
+            // Garante que o recebedor salvo permaneça no primeiro lugar absoluto da lista
+            val prioritizedFullRecs = if (preservedSelectedRec != null) {
+                listOf(preservedSelectedRec) + fullRecebedores.filterNot { it.id == preservedSelectedRec.id }
+            } else {
+                fullRecebedores
+            }
+
+            _state.value = _state.value.copy(
+                candidatePersons = filteredPersons,
+                allHousePersons = housePersons,
+                availableComplements = distinctComps,
+                selectedComplement = targetComp,
+                availableRecebedores = prioritizedFullRecs,
+                selectedRecebedor = preservedSelectedRec
             )
         }
     }
@@ -1697,7 +1944,7 @@ object AccessibilityAutomationEngine {
                 withContext(Dispatchers.Main) {
                     try {
                         val status = if (matched.isNotEmpty()) "Destinatário encontrado!" else "Endereço pronto para salvar"
-                        Toast.makeText(service, "✓ $newAddress\n$status", Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(service, "✓ $newAddress\n$status")
                     } catch (_: Exception) {}
                 }
             }

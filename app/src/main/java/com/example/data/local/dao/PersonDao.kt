@@ -23,8 +23,9 @@ interface PersonDao {
 
     @Query("""
         SELECT * FROM pessoas 
-        WHERE (:number != '' AND (numero = :number OR numero LIKE :number || '%' OR endereco LIKE '%' || :number || '%' OR (endereco || ' ' || numero) LIKE '%' || :number || '%'))
-           OR (:keyword != '' AND (endereco LIKE '%' || :keyword || '%' OR nome LIKE '%' || :keyword || '%'))
+        WHERE (:number != '' AND :keyword != '' AND (numero = :number OR numero LIKE :number || '%') AND (endereco LIKE '%' || :keyword || '%'))
+           OR (:number != '' AND :keyword = '' AND (numero = :number OR numero LIKE :number || '%' OR endereco LIKE '%' || :number || '%'))
+           OR (:number = '' AND :keyword != '' AND (endereco LIKE '%' || :keyword || '%' OR nome LIKE '%' || :keyword || '%'))
         ORDER BY endereco ASC, numero ASC
         LIMIT 200
     """)

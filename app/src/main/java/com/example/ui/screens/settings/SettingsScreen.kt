@@ -1,8 +1,11 @@
 package com.example.ui.screens.settings
 
+import com.example.util.ToastHelper
+
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,23 +16,39 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddLocation
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.Vibration
+import com.example.data.local.BrazilianLocationsData
+import com.example.data.local.BrazilianState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -90,6 +109,11 @@ import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LocationCity
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import com.example.DeliveryApp
+import com.example.data.local.entity.StreetCatalog
 import com.example.util.FeedbackHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -117,6 +141,33 @@ fun SettingsScreen(
 
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var updateInfoAvailable by remember { mutableStateOf<AppUpdateInfo?>(null) }
+
+    var showChangeCityDialog by remember { mutableStateOf(false) }
+    var showStatePickerDialog by remember { mutableStateOf(false) }
+    var selectedStateUf by remember { mutableStateOf("MG") }
+    var citySearchInput by remember { mutableStateOf("") }
+    var showAddStreetDialog by remember { mutableStateOf(false) }
+    var newStreetTipo by remember { mutableStateOf("Rua") }
+    var newStreetNome by remember { mutableStateOf("") }
+    var newStreetBairro by remember { mutableStateOf("") }
+
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
+    val dismissChangeCityDialog = {
+        keyboardController?.hide()
+        focusManager.clearFocus()
+        showChangeCityDialog = false
+    }
+
+    val dismissAddStreetDialog = {
+        keyboardController?.hide()
+        focusManager.clearFocus()
+        showAddStreetDialog = false
+    }
+
+    val streetRepo = remember { DeliveryApp.instance.streetCatalogRepository }
+    val availableCities by streetRepo.getAvailableCities().collectAsState(initial = listOf("Monte Santo de Minas"))
 
     Scaffold(
         topBar = {
@@ -278,18 +329,18 @@ fun SettingsScreen(
                                     if (viewModel != null) {
                                         viewModel.exportRoomToFirestore { res ->
                                             if (res is SyncState.Success) {
-                                                Toast.makeText(context, res.message, Toast.LENGTH_SHORT).show()
+                                                ToastHelper.show(context, res.message)
                                             } else if (res is SyncState.Error) {
-                                                Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                                ToastHelper.showLong(context, res.message)
                                             }
                                         }
                                     } else {
                                         scope.launch {
                                             val res = firebaseSyncRepository?.syncAllToCloud()
                                             if (res is SyncState.Success) {
-                                                Toast.makeText(context, res.message, Toast.LENGTH_SHORT).show()
+                                                ToastHelper.show(context, res.message)
                                             } else if (res is SyncState.Error) {
-                                                Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                                ToastHelper.showLong(context, res.message)
                                             }
                                         }
                                     }
@@ -315,18 +366,18 @@ fun SettingsScreen(
                                     if (viewModel != null) {
                                         viewModel.importFromFirestore { res ->
                                             if (res is SyncState.Success) {
-                                                Toast.makeText(context, res.message, Toast.LENGTH_SHORT).show()
+                                                ToastHelper.show(context, res.message)
                                             } else if (res is SyncState.Error) {
-                                                Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                                ToastHelper.showLong(context, res.message)
                                             }
                                         }
                                     } else {
                                         scope.launch {
                                             val res = firebaseSyncRepository?.fetchAllFromCloud()
                                             if (res is SyncState.Success) {
-                                                Toast.makeText(context, res.message, Toast.LENGTH_SHORT).show()
+                                                ToastHelper.show(context, res.message)
                                             } else if (res is SyncState.Error) {
-                                                Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                                ToastHelper.showLong(context, res.message)
                                             }
                                         }
                                     }
@@ -489,7 +540,7 @@ fun SettingsScreen(
                                 vibrationEnabled = settings.vibrationEnabled,
                                 soundEnabled = settings.soundEnabled
                             )
-                            Toast.makeText(context, "Feedback testado com sucesso!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Feedback testado com sucesso!")
                         },
                         modifier = Modifier.fillMaxWidth().height(38.dp),
                         shape = RoundedCornerShape(8.dp)
@@ -497,6 +548,109 @@ fun SettingsScreen(
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Testar Feedback de Sucesso Agora", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+
+            // Seção de Cidade & Catálogo de Ruas
+            Card(
+                modifier = Modifier.fillMaxWidth().testTag("city_street_catalog_card"),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.LocationCity,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "CIDADE & RUAS OFFLINE",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Cidade Ativa", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = settings.selectedCity,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                val activeUf = BrazilianLocationsData.findStateForCity(settings.selectedCity)?.uf ?: "MG"
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Text(
+                                        text = activeUf,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                selectedStateUf = BrazilianLocationsData.findStateForCity(settings.selectedCity)?.uf ?: "MG"
+                                citySearchInput = ""
+                                showChangeCityDialog = true
+                            },
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.LocationCity, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Trocar Cidade", fontSize = 12.sp)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "• Catálogo local de logradouros para autocompletar nomes de ruas sem precisar de internet.\n• Se pesquisar ou cadastrar um endereço que não está no catálogo, o aplicativo aceita e continua normalmente.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 16.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedButton(
+                        onClick = {
+                            newStreetNome = ""
+                            newStreetBairro = ""
+                            newStreetTipo = "Rua"
+                            showAddStreetDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth().height(38.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Cadastrar Nova Rua na Cidade", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -539,7 +693,7 @@ fun SettingsScreen(
                                 if (info != null) {
                                     updateInfoAvailable = info
                                 } else {
-                                    Toast.makeText(context, "Seu app já está atualizado na versão mais recente (v${BuildConfig.VERSION_NAME})!", Toast.LENGTH_SHORT).show()
+                                    ToastHelper.show(context, "Seu app já está atualizado na versão mais recente (v${BuildConfig.VERSION_NAME})!")
                                 }
                             }
                         },
@@ -586,7 +740,7 @@ fun SettingsScreen(
                     Button(
                         onClick = {
                             ClipboardHelper.copyToClipboard(context, "Backup JSON", exportedJsonText)
-                            Toast.makeText(context, "Backup copiado para a Área de Transferência!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Backup copiado para a Área de Transferência!")
                             showExportDialog = false
                         }
                     ) {
@@ -626,7 +780,7 @@ fun SettingsScreen(
                         onClick = {
                             scope.launch {
                                 val result = settingsRepository.importDataJson(importJsonText, merge = mergeImport)
-                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                ToastHelper.showLong(context, result.message)
                                 if (result.success) {
                                     showImportDialog = false
                                 }
@@ -663,7 +817,7 @@ fun SettingsScreen(
                                     onAreaSelected = { left, top, right, bottom ->
                                         scope.launch {
                                             settingsRepository.setCustomScanArea(left, top, right, bottom)
-                                            Toast.makeText(context, "✅ Área alvo configurada para ${selectedApp.name}!", Toast.LENGTH_SHORT).show()
+                                            ToastHelper.show(context, "✅ Área alvo configurada para ${selectedApp.name}!")
                                         }
                                     },
                                     onDismiss = {}
@@ -671,11 +825,11 @@ fun SettingsScreen(
                                 selector.show()
                             }
                         } else {
-                            Toast.makeText(context, "Não foi possível abrir ${selectedApp.name}", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Não foi possível abrir ${selectedApp.name}")
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
-                        Toast.makeText(context, "Erro ao abrir app: ${e.message}", Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(context, "Erro ao abrir app: ${e.message}")
                     }
                 },
                 onDirectDraw = {
@@ -685,12 +839,407 @@ fun SettingsScreen(
                         onAreaSelected = { left, top, right, bottom ->
                             scope.launch {
                                 settingsRepository.setCustomScanArea(left, top, right, bottom)
-                                Toast.makeText(context, "✅ Área alvo desenhada e salva!", Toast.LENGTH_SHORT).show()
+                                ToastHelper.show(context, "✅ Área alvo desenhada e salva!")
                             }
                         },
                         onDismiss = {}
                     )
                     selector.show()
+                }
+            )
+        }
+
+        // Diálogo para Selecionar o Estado (UF)
+        if (showStatePickerDialog) {
+            AlertDialog(
+                onDismissRequest = { showStatePickerDialog = false },
+                title = { Text("Selecione o Estado (UF)", fontWeight = FontWeight.Bold) },
+                text = {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 360.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(BrazilianLocationsData.STATES) { state ->
+                            val isCurrentState = state.uf == selectedStateUf
+                            Surface(
+                                onClick = {
+                                    selectedStateUf = state.uf
+                                    showStatePickerDialog = false
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isCurrentState) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = if (isCurrentState) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = state.uf,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp,
+                                                color = if (isCurrentState) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(text = state.name, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                                        Text(text = "Região ${state.region}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    if (isCurrentState) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { showStatePickerDialog = false }) {
+                        Text("FECHAR")
+                    }
+                }
+            )
+        }
+
+        // Diálogo para Trocar ou Adicionar Cidade (com escolha de Estado e busca preditiva)
+        if (showChangeCityDialog) {
+            val currentState = remember(selectedStateUf) {
+                BrazilianLocationsData.STATES.firstOrNull { it.uf == selectedStateUf }
+            }
+            val filteredCities = remember(selectedStateUf, citySearchInput, availableCities) {
+                BrazilianLocationsData.searchCities(selectedStateUf, citySearchInput, availableCities)
+            }
+
+            AlertDialog(
+                onDismissRequest = dismissChangeCityDialog,
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.LocationCity, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Trocar Cidade", fontWeight = FontWeight.Bold)
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // 1. Passo: Escolha de Estado
+                        Text(
+                            text = "1. Estado (UF):",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Surface(
+                            onClick = { showStatePickerDialog = true },
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(end = 8.dp)
+                                ) {
+                                    Text(
+                                        text = selectedStateUf,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                                Text(
+                                    text = currentState?.name ?: selectedStateUf,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text("Mudar", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+
+                        // Atalhos de Estados
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            listOf("MG", "SP", "RJ", "PR", "GO", "BA").forEach { uf ->
+                                val isSelectedUf = selectedStateUf == uf
+                                Surface(
+                                    onClick = { selectedStateUf = uf },
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (isSelectedUf) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(modifier = Modifier.padding(vertical = 5.dp), contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = uf,
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isSelectedUf) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isSelectedUf) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+
+                        // 2. Passo: Digitação da Cidade
+                        Text(
+                            text = "2. Digite a Cidade (sugestões em tempo real):",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        OutlinedTextField(
+                            value = citySearchInput,
+                            onValueChange = { citySearchInput = it },
+                            label = { Text("Nome da Cidade ($selectedStateUf)") },
+                            placeholder = { Text("Ex: Monte Santo, Mococa, Passos...") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                            },
+                            trailingIcon = {
+                                if (citySearchInput.isNotBlank()) {
+                                    IconButton(onClick = { citySearchInput = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Limpar", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = {
+                                keyboardController?.hide()
+                                focusManager.clearFocus()
+                            }),
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+
+                        // 3. Passo: Lista de cidades que surgem conforme digita
+                        val isCustomCityNeeded = citySearchInput.isNotBlank() &&
+                            filteredCities.none { it.equals(citySearchInput.trim(), ignoreCase = true) }
+
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 210.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            if (isCustomCityNeeded) {
+                                item {
+                                    val formattedCustom = citySearchInput.trim().split(" ")
+                                        .filter { it.isNotBlank() }
+                                        .joinToString(" ") { word ->
+                                            if (word.lowercase() in listOf("de", "do", "da", "dos", "das", "e")) word.lowercase()
+                                            else word.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+                                        }
+                                    Surface(
+                                        onClick = {
+                                            keyboardController?.hide()
+                                            focusManager.clearFocus()
+                                            scope.launch {
+                                                streetRepo.setSelectedCity(formattedCustom)
+                                                ToastHelper.show(context, "Cidade alterada para: $formattedCustom ($selectedStateUf)")
+                                                showChangeCityDialog = false
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.AddLocation,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.secondary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = "Usar: \"$formattedCustom\"",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                )
+                                                Text(
+                                                    text = "Cadastrar e selecionar esta cidade em $selectedStateUf",
+                                                    fontSize = 10.sp,
+                                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            items(filteredCities) { city ->
+                                val isSelected = city.equals(settings.selectedCity, ignoreCase = true)
+                                Surface(
+                                    onClick = {
+                                        keyboardController?.hide()
+                                        focusManager.clearFocus()
+                                        scope.launch {
+                                            streetRepo.setSelectedCity(city)
+                                            ToastHelper.show(context, "Cidade alterada para: $city ($selectedStateUf)")
+                                            showChangeCityDialog = false
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                    border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.LocationCity,
+                                            contentDescription = null,
+                                            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = city,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            fontSize = 13.sp,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surface,
+                                            modifier = Modifier.padding(end = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = selectedStateUf,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                        if (isSelected) {
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = "Ativa",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = dismissChangeCityDialog) {
+                        Text("CANCELAR")
+                    }
+                }
+            )
+        }
+
+        // Diálogo para Adicionar Nova Rua Manualmente
+        if (showAddStreetDialog) {
+            AlertDialog(
+                onDismissRequest = dismissAddStreetDialog,
+                title = { Text("Cadastrar Rua na Cidade", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "Cidade atual: ${settings.selectedCity}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        OutlinedTextField(
+                            value = newStreetTipo,
+                            onValueChange = { newStreetTipo = it },
+                            label = { Text("Tipo (Rua, Av, Praça, Travessa)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+
+                        OutlinedTextField(
+                            value = newStreetNome,
+                            onValueChange = { newStreetNome = it },
+                            label = { Text("Nome do Logradouro *") },
+                            placeholder = { Text("Ex: Cel. Antônio Paulino") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+
+                        OutlinedTextField(
+                            value = newStreetBairro,
+                            onValueChange = { newStreetBairro = it },
+                            label = { Text("Bairro") },
+                            placeholder = { Text("Ex: Centro, Vila Nova") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val trimmedNome = newStreetNome.trim()
+                            if (trimmedNome.isNotBlank()) {
+                                keyboardController?.hide()
+                                focusManager.clearFocus()
+                                scope.launch {
+                                    streetRepo.addStreet(
+                                        StreetCatalog(
+                                            nome = trimmedNome,
+                                            tipo = newStreetTipo.trim().ifBlank { "Rua" },
+                                            bairro = newStreetBairro.trim(),
+                                            cidade = settings.selectedCity,
+                                            uf = BrazilianLocationsData.findStateForCity(settings.selectedCity)?.uf ?: selectedStateUf
+                                        )
+                                    )
+                                    ToastHelper.show(context, "Rua cadastrada no catálogo offline!")
+                                    showAddStreetDialog = false
+                                }
+                            }
+                        },
+                        enabled = newStreetNome.isNotBlank()
+                    ) {
+                        Text("SALVAR RUA")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = dismissAddStreetDialog) {
+                        Text("CANCELAR")
+                    }
                 }
             )
         }

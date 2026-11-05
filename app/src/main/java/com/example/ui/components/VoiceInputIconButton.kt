@@ -3,6 +3,7 @@ package com.example.ui.components
 import android.Manifest
 import android.content.pm.PackageManager
 import android.widget.Toast
+import com.example.util.ToastHelper
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -52,7 +53,7 @@ fun VoiceInputIconButton(
             SpeechHelper.startListening(
                 context = context,
                 onReady = {
-                    Toast.makeText(context, hintPrompt, Toast.LENGTH_SHORT).show()
+                    ToastHelper.show(context, hintPrompt)
                 },
                 onResult = { text ->
                     isListening = false
@@ -62,11 +63,11 @@ fun VoiceInputIconButton(
                 },
                 onError = { err ->
                     isListening = false
-                    Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                    ToastHelper.show(context, err)
                 }
             )
         } else {
-            Toast.makeText(context, "Permissão de microfone necessária para falar", Toast.LENGTH_SHORT).show()
+            ToastHelper.show(context, "Permissão de microfone necessária para falar")
         }
     }
 
@@ -99,7 +100,7 @@ fun VoiceInputIconButton(
                 SpeechHelper.startListening(
                     context = context,
                     onReady = {
-                        Toast.makeText(context, hintPrompt, Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(context, hintPrompt)
                     },
                     onResult = { text ->
                         isListening = false
@@ -109,7 +110,7 @@ fun VoiceInputIconButton(
                     },
                     onError = { err ->
                         isListening = false
-                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(context, err)
                     }
                 )
             } else {

@@ -19,6 +19,10 @@ import com.example.ui.navigation.AppNavigation
 import com.example.ui.theme.DeliveryTheme
 
 class MainActivity : ComponentActivity() {
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.example.util.LocaleHelper.applyPortugueseLocale(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -29,23 +33,25 @@ class MainActivity : ComponentActivity() {
         setContent {
             val settings by app.settingsRepository.getSettings().collectAsStateWithLifecycle(initialValue = AppSettings())
             DeliveryTheme(themeMode = settings.themeMode) {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.TopCenter
-                    ) {
+                com.example.ui.components.ProvideAppTextToolbar {
+                    Surface(modifier = Modifier.fillMaxSize()) {
                         Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .widthIn(max = 840.dp)
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.TopCenter
                         ) {
-                            val navController = rememberNavController()
-                            AppNavigation(
-                                navController = navController,
-                                app = app,
-                                initialAction = action,
-                                initialAddress = initialAddress
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .widthIn(max = 840.dp)
+                            ) {
+                                val navController = rememberNavController()
+                                AppNavigation(
+                                    navController = navController,
+                                    app = app,
+                                    initialAction = action,
+                                    initialAddress = initialAddress
+                                )
+                            }
                         }
                     }
                 }

@@ -1,5 +1,7 @@
 package com.example.ui.screens.home
 
+import com.example.util.ToastHelper
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -124,19 +126,14 @@ fun HomeScreen(
     ) { isGranted ->
         viewModel.refreshPermissions(context)
         if (isGranted) {
-            Toast.makeText(context, "Permissão de microfone concedida!", Toast.LENGTH_SHORT).show()
+            ToastHelper.show(context, "Permissão de microfone concedida!")
         } else {
-            Toast.makeText(context, "Permissão de microfone não concedida.", Toast.LENGTH_SHORT).show()
+            ToastHelper.show(context, "Permissão de microfone não concedida.")
         }
     }
 
     LaunchedEffect(Unit) {
         viewModel.refreshPermissions(context)
-        delay(1500) // Verifica atualizações automaticamente em segundo plano após inicialização
-        val info = UpdateChecker.checkForUpdates(context)
-        if (info != null) {
-            updateInfoAvailable = info
-        }
     }
 
     Scaffold(
@@ -298,7 +295,7 @@ fun HomeScreen(
                                     if (!uiState.isRecordAudioGranted) {
                                         audioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
                                     } else {
-                                        Toast.makeText(context, "Permissão do microfone já está ativa!", Toast.LENGTH_SHORT).show()
+                                        ToastHelper.show(context, "Permissão do microfone já está ativa!")
                                     }
                                 }
                             )
@@ -381,30 +378,15 @@ fun HomeScreen(
                         Text(text = "📊", fontSize = 28.sp)
                         Spacer(modifier = Modifier.width(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "Relatório Diário de Atividades",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = BentoOnPrimaryContainer
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = BentoPrimary
-                                ) {
-                                    Text(
-                                        text = "AUDITORIA",
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                }
-                            }
+                            Text(
+                                text = "Relatório Diário & Auditoria",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = BentoOnPrimaryContainer
+                            )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Tempo total em uso no dia, registro contínuo de todas as ações e funções",
+                                text = "Tempo total em uso no dia, registro contínuo e auditoria de ações do assistente",
                                 fontSize = 12.sp,
                                 color = BentoOnPrimaryContainer.copy(alpha = 0.85f)
                             )
@@ -509,7 +491,7 @@ fun HomeScreen(
                                     onAreaSelected = { left, top, right, bottom ->
                                         scope.launch {
                                             app?.settingsRepository?.setCustomScanArea(left, top, right, bottom)
-                                            Toast.makeText(context, "✅ Área alvo configurada para ${selectedApp.name}!", Toast.LENGTH_SHORT).show()
+                                            ToastHelper.show(context, "✅ Área alvo configurada para ${selectedApp.name}!")
                                         }
                                     },
                                     onDismiss = {}
@@ -517,11 +499,11 @@ fun HomeScreen(
                                 selector.show()
                             }
                         } else {
-                            Toast.makeText(context, "Não foi possível abrir ${selectedApp.name}", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(context, "Não foi possível abrir ${selectedApp.name}")
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
-                        Toast.makeText(context, "Erro ao abrir app: ${e.message}", Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(context, "Erro ao abrir app: ${e.message}")
                     }
                 },
                 onDirectDraw = {
@@ -531,7 +513,7 @@ fun HomeScreen(
                         onAreaSelected = { left, top, right, bottom ->
                             scope.launch {
                                 app?.settingsRepository?.setCustomScanArea(left, top, right, bottom)
-                                Toast.makeText(context, "✅ Área alvo desenhada e salva!", Toast.LENGTH_SHORT).show()
+                                ToastHelper.show(context, "✅ Área alvo desenhada e salva!")
                             }
                         },
                         onDismiss = {}

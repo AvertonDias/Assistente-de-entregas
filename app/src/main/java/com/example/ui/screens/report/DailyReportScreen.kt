@@ -1,5 +1,7 @@
 package com.example.ui.screens.report
 
+import com.example.util.ToastHelper
+
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -107,11 +109,11 @@ fun DailyReportScreen(
                         outputStream.write(textToSave.toByteArray(Charsets.UTF_8))
                     }
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Relatório salvo em arquivo com sucesso!", Toast.LENGTH_LONG).show()
+                        ToastHelper.showLong(context, "Relatório salvo em arquivo com sucesso!")
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Erro ao salvar arquivo: ${e.message}", Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(context, "Erro ao salvar arquivo: ${e.message}")
                     }
                 } finally {
                     pendingTextToSave = null
@@ -343,7 +345,7 @@ fun DailyReportScreen(
                     onClick = {
                         viewModel.clearHistory()
                         showDeleteConfirmDialog = false
-                        Toast.makeText(context, "Histórico do dia apagado.", Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(context, "Histórico do dia apagado.")
                     }
                 ) {
                     Text("Apagar", color = MaterialTheme.colorScheme.error)

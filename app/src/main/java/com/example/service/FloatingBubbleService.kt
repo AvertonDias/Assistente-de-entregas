@@ -15,7 +15,9 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
+import com.example.util.ToastHelper
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -48,6 +50,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.blur
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -72,12 +75,15 @@ import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
+import com.example.data.local.entity.StreetCatalog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -98,7 +104,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import com.example.data.remote.CpfLookupService
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -194,18 +202,18 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
     private fun executeSignatureDrawing(signatureJson: String) {
         if (signatureJson.isBlank()) {
-            Toast.makeText(this@FloatingBubbleService, "Nenhuma assinatura cadastrada para este recebedor.", Toast.LENGTH_SHORT).show()
+            ToastHelper.show(this@FloatingBubbleService, "Nenhuma assinatura cadastrada para este recebedor.")
             return
         }
         val sigData = SignatureData.fromJson(signatureJson)
         if (sigData == null || sigData.strokes.isEmpty()) {
-            Toast.makeText(this@FloatingBubbleService, "Assinatura vazia ou sem traços salvos.", Toast.LENGTH_SHORT).show()
+            ToastHelper.show(this@FloatingBubbleService, "Assinatura vazia ou sem traços salvos.")
             return
         }
 
         // 1. Recolher temporariamente o painel para desobstruir a tela do app de entregas
         updateWindowLayoutMode(OverlayMode.BUBBLE)
-        Toast.makeText(this@FloatingBubbleService, "✍️ Desenhando assinatura...", Toast.LENGTH_SHORT).show()
+        ToastHelper.show(this@FloatingBubbleService, "✍️ Desenhando assinatura...")
 
         // 2. Obter a velocidade configurada pelo usuário nas preferências
         val sigStartTime = System.currentTimeMillis()
@@ -221,7 +229,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             mainHandler.postDelayed({
                 AccessibilityAutomationEngine.dispatchSignatureGestures(sigData, speedMode = speedMode) { success, msg ->
                     val sigDuration = System.currentTimeMillis() - sigStartTime
-                    Toast.makeText(this@FloatingBubbleService, msg, Toast.LENGTH_SHORT).show()
+                    ToastHelper.show(this@FloatingBubbleService, msg)
                     if (success) {
                         com.example.util.AppActivityTracker.logAction(
                             actionType = "SIGNATURE_APPLIED",
@@ -233,7 +241,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                         )
                         triggerSuccessFeedback()
                         mainHandler.postDelayed({
-                            AccessibilityAutomationEngine.resetAndClearAfterSignature(5000L)
+                            AccessibilityAutomationEngine.resetAndClearAfterSignature(3000L)
                         }, 300L)
                     }
                 }
@@ -259,19 +267,64 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
     private enum class OverlayMode { BUBBLE, PANEL, MODAL, FULLSCREEN_SIGNATURE }
 
+    private fun dismissKeyboard() {
+        val view = floatingView ?: return
+        try {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            val currentFocus = view.findFocus()
+            if (currentFocus != null) {
+                imm?.hideSoftInputFromWindow(currentFocus.windowToken, 0)
+                currentFocus.clearFocus()
+            }
+            imm?.hideSoftInputFromWindow(view.windowToken, 0)
+            view.clearFocus()
+        } catch (_: Exception) {}
+    }
+
     private fun updateWindowLayoutMode(mode: OverlayMode) {
         val params = windowLayoutParams ?: return
         val view = floatingView ?: return
 
+        if (mode == OverlayMode.BUBBLE || mode == OverlayMode.PANEL) {
+            dismissKeyboard()
+        }
+
         when (mode) {
-            OverlayMode.BUBBLE, OverlayMode.PANEL -> {
+            OverlayMode.BUBBLE -> {
                 AccessibilityAutomationEngine.setModalActive(false)
                 val (screenWidth, screenHeight) = getScreenBounds()
                 val density = resources.displayMetrics.density
-                val estimatedWidth = if (mode == OverlayMode.PANEL) (360 * density).toInt() else (64 * density).toInt()
-                val estimatedHeight = if (mode == OverlayMode.PANEL) (480 * density).toInt() else (64 * density).toInt()
-                val viewWidth = view.width.takeIf { it > 0 } ?: estimatedWidth
-                val viewHeight = view.height.takeIf { it > 0 } ?: estimatedHeight
+                val bubbleWidth = (72 * density).toInt()
+                val bubbleHeight = (72 * density).toInt()
+
+                val maxX = (screenWidth - bubbleWidth).coerceAtLeast(0)
+                val maxY = (screenHeight - bubbleHeight).coerceAtLeast(0)
+
+                lastBubbleX = lastBubbleX.coerceIn(0, maxX)
+                lastBubbleY = lastBubbleY.coerceIn(0, maxY)
+
+                params.width = WindowManager.LayoutParams.WRAP_CONTENT
+                params.height = WindowManager.LayoutParams.WRAP_CONTENT
+                params.gravity = Gravity.TOP or Gravity.START
+                params.x = lastBubbleX
+                params.y = lastBubbleY
+                params.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                params.dimAmount = 0f
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    params.flags = params.flags and WindowManager.LayoutParams.FLAG_BLUR_BEHIND.inv()
+                    params.blurBehindRadius = 0
+                }
+                view.requestLayout()
+            }
+            OverlayMode.PANEL -> {
+                AccessibilityAutomationEngine.setModalActive(false)
+                val (screenWidth, screenHeight) = getScreenBounds()
+                val density = resources.displayMetrics.density
+                val estimatedWidth = (360 * density).toInt()
+                val estimatedHeight = (480 * density).toInt()
+                val viewWidth = view.width.takeIf { it > (100 * density) } ?: estimatedWidth
+                val viewHeight = view.height.takeIf { it > (100 * density) } ?: estimatedHeight
 
                 val maxX = (screenWidth - viewWidth).coerceAtLeast(0)
                 val maxY = (screenHeight - viewHeight).coerceAtLeast(0)
@@ -285,7 +338,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                 params.x = lastBubbleX
                 params.y = lastBubbleY
                 params.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                 params.dimAmount = 0f
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     params.flags = params.flags and WindowManager.LayoutParams.FLAG_BLUR_BEHIND.inv()
@@ -392,7 +445,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
     private fun createFloatingBubble() {
         if (!PermissionUtils.hasOverlayPermission(this)) {
-            Toast.makeText(this, "Permissão de sobreposição necessária", Toast.LENGTH_LONG).show()
+            ToastHelper.showLong(this, "Permissão de sobreposição necessária")
             stopSelf()
             return
         }
@@ -410,7 +463,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             layoutFlag,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -423,40 +476,42 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             setViewTreeSavedStateRegistryOwner(this@FloatingBubbleService)
 
             setContent {
-                FloatingBubbleUI(
-                    onDrag = { dx, dy ->
-                        windowLayoutParams?.let { params ->
-                            val (screenWidth, screenHeight) = getScreenBounds()
-                            val viewWidth = this@apply.width.takeIf { it > 0 } ?: (56 * resources.displayMetrics.density).toInt()
-                            val viewHeight = this@apply.height.takeIf { it > 0 } ?: (56 * resources.displayMetrics.density).toInt()
+                com.example.ui.components.ProvideAppTextToolbar {
+                    FloatingBubbleUI(
+                        onDrag = { dx, dy ->
+                            windowLayoutParams?.let { params ->
+                                val (screenWidth, screenHeight) = getScreenBounds()
+                                val viewWidth = this@apply.width.takeIf { it > 0 } ?: (56 * resources.displayMetrics.density).toInt()
+                                val viewHeight = this@apply.height.takeIf { it > 0 } ?: (56 * resources.displayMetrics.density).toInt()
 
-                            val maxX = (screenWidth - viewWidth).coerceAtLeast(0)
-                            val maxY = (screenHeight - viewHeight).coerceAtLeast(0)
+                                val maxX = (screenWidth - viewWidth).coerceAtLeast(0)
+                                val maxY = (screenHeight - viewHeight).coerceAtLeast(0)
 
-                            val newX = (params.x + dx.toInt()).coerceIn(0, maxX)
-                            val newY = (params.y + dy.toInt()).coerceIn(0, maxY)
+                                val newX = (params.x + dx.toInt()).coerceIn(0, maxX)
+                                val newY = (params.y + dy.toInt()).coerceIn(0, maxY)
 
-                            params.x = newX
-                            params.y = newY
-                            lastBubbleX = newX
-                            lastBubbleY = newY
-                            try {
-                                windowManager?.updateViewLayout(this@apply, params)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
+                                params.x = newX
+                                params.y = newY
+                                lastBubbleX = newX
+                                lastBubbleY = newY
+                                try {
+                                    windowManager?.updateViewLayout(this@apply, params)
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
                             }
+                        },
+                        onCloseService = {
+                            stopSelf()
+                        },
+                        onOpenApp = {
+                            val intent = Intent(this@FloatingBubbleService, MainActivity::class.java).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            }
+                            startActivity(intent)
                         }
-                    },
-                    onCloseService = {
-                        stopSelf()
-                    },
-                    onOpenApp = {
-                        val intent = Intent(this@FloatingBubbleService, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        }
-                        startActivity(intent)
-                    }
-                )
+                    )
+                }
             }
         }
 
@@ -475,6 +530,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         onOpenApp: () -> Unit
     ) {
         val appSettings by DeliveryApp.instance.settingsRepository.getSettings().collectAsState(initial = com.example.data.repository.AppSettings())
+        val verifiedCpfsMap by com.example.data.remote.CpfVerificationTracker.verifiedCpfs.collectAsState()
         var isExpanded by remember { mutableStateOf(false) }
         var isCompactMode by remember { mutableStateOf(false) }
 
@@ -522,6 +578,189 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         var showDiscardEditConfirmDialog by remember { mutableStateOf(false) }
         var showBubbleClearSigConfirmDialog by remember { mutableStateOf(false) }
 
+        // Consulta online de CPF e recuperação de dados de recebedores já salvos
+        val bubbleCoroutineScope = rememberCoroutineScope()
+        var isLookingUpCpfOnline by remember { mutableStateOf(false) }
+        var cpfLookupMessage by remember { mutableStateOf<String?>(null) }
+        var lastAutoLookedUpCpf by remember { mutableStateOf("") }
+        var savedRecipientFoundByName by remember { mutableStateOf<com.example.util.SavedRecipientInfo?>(null) }
+        var apiNameCorrectionSuggestion by remember { mutableStateOf<String?>(null) }
+        var officialApiName by remember { mutableStateOf<String?>(null) }
+
+        val performCpfLookup: (String) -> Unit = { rawDoc ->
+            val digits = rawDoc.filter { it.isDigit() }
+            if (digits.length == 11) {
+                isLookingUpCpfOnline = true
+                cpfLookupMessage = "Consultando CPF na API..."
+                bubbleCoroutineScope.launch(Dispatchers.IO) {
+                    // 1º PRIORIDADE ABSOLUTA: Consulta direta na API oficial do CPF
+                    val result = CpfLookupService.lookupCpf(digits)
+                    // Busca local secundária apenas para recuperar assinatura já salva anteriormente (em background)
+                    val localSaved = com.example.util.SavedRecipientLookupHelper.findByDocument(rawDoc)
+
+                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                        isLookingUpCpfOnline = false
+
+                        if (result.success && result.nome.isNotBlank()) {
+                            // API encontrou com sucesso -> Prioridade máxima para o nome oficial da API
+                            val apiNome = result.nome
+                            officialApiName = apiNome
+                            lastAutoLookedUpCpf = digits
+                            com.example.data.remote.CpfVerificationTracker.markCpfVerified(digits, apiNome)
+
+                            var pulledSig = false
+                            if (collectedSignatureData == null && localSaved != null && localSaved.assinatura.isNotBlank()) {
+                                try {
+                                    collectedSignatureData = SignatureData.fromJson(localSaved.assinatura)
+                                    pulledSig = true
+                                } catch (_: Throwable) {}
+                            }
+
+                            val currentTyped = recipientName.trim()
+                            val isDiff = currentTyped.isNotBlank() &&
+                                    com.example.util.AddressNormalizer.normalize(currentTyped) != com.example.util.AddressNormalizer.normalize(apiNome)
+
+                            if (isDiff) {
+                                apiNameCorrectionSuggestion = apiNome
+                                cpfLookupMessage = "⚠️ Divergência: Nome na API é '$apiNome'"
+                                ToastHelper.showLong(serviceContext, "Divergência com a base oficial! Sugestão disponível para correção.")
+                            } else {
+                                recipientName = apiNome
+                                apiNameCorrectionSuggestion = null
+                                cpfLookupMessage = buildString {
+                                    append("✓ Nome obtido via API: $apiNome")
+                                    if (pulledSig) append(" + Assinatura do banco")
+                                }
+                                ToastHelper.show(serviceContext, "Nome obtido pela API: $apiNome")
+                            }
+                        } else {
+                            // 2º PRIORIDADE: FALLBACK NO BANCO LOCAL (apenas se a API falhar ou não encontrar)
+                            if (localSaved != null && localSaved.nome.isNotBlank()) {
+                                recipientName = localSaved.nome
+                                lastAutoLookedUpCpf = digits
+                                var pulledSig = false
+                                if (collectedSignatureData == null && localSaved.assinatura.isNotBlank()) {
+                                    try {
+                                        collectedSignatureData = SignatureData.fromJson(localSaved.assinatura)
+                                        pulledSig = true
+                                    } catch (_: Throwable) {}
+                                }
+                                cpfLookupMessage = buildString {
+                                    append("✓ Puxado do banco local: ${localSaved.nome}")
+                                    if (pulledSig) append(" + Assinatura")
+                                }
+                                ToastHelper.show(serviceContext, "Nome recuperado do banco local: ${localSaved.nome}")
+                            } else {
+                                val err = result.errorMessage ?: "CPF não localizado na API"
+                                cpfLookupMessage = "⚠️ $err"
+                                ToastHelper.show(serviceContext, err)
+                            }
+                        }
+                    }
+                }
+            } else if (rawDoc.trim().length >= 5) {
+                // Documento com formato de RG (ou outro doc) -> Busca recebedor no banco local em background
+                bubbleCoroutineScope.launch(Dispatchers.IO) {
+                    val localSaved = com.example.util.SavedRecipientLookupHelper.findByDocument(rawDoc)
+                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                        if (localSaved != null && localSaved.nome.isNotBlank()) {
+                            recipientName = localSaved.nome
+                            lastAutoLookedUpCpf = rawDoc.trim()
+                            var pulledSig = false
+                            if (collectedSignatureData == null && localSaved.assinatura.isNotBlank()) {
+                                try {
+                                    collectedSignatureData = SignatureData.fromJson(localSaved.assinatura)
+                                    pulledSig = true
+                                } catch (_: Throwable) {}
+                            }
+                            cpfLookupMessage = buildString {
+                                append("✓ Puxado do banco local via RG: ${localSaved.nome}")
+                                if (pulledSig) append(" + Assinatura")
+                            }
+                            ToastHelper.show(serviceContext, "Recebedor localizado no banco pelo RG!")
+                        }
+                    }
+                }
+            } else {
+                ToastHelper.show(serviceContext, "Informe o documento para pesquisar")
+            }
+        }
+
+        // Ao abrir modal para editar morador existente com CPF, verifica na API para sugerir correção
+        LaunchedEffect(isEditModalOpen, editingPersonId, editingRecebedorId) {
+            officialApiName = null
+            apiNameCorrectionSuggestion = null
+            cpfLookupMessage = null
+            lastAutoLookedUpCpf = ""
+            savedRecipientFoundByName = null
+            if (isEditModalOpen) {
+                val digits = recipientDocument.filter { it.isDigit() }
+                if (digits.length == 11) {
+                    performCpfLookup(digits)
+                }
+            }
+        }
+
+        // Mantém a sugestão de divergência ativa apenas se o documento atual corresponder exatamente ao CPF consultado
+        LaunchedEffect(recipientName, officialApiName, recipientDocument) {
+            val currentCpfDigits = recipientDocument.filter { it.isDigit() }
+            val offName = officialApiName
+            if (offName != null && offName.isNotBlank() && currentCpfDigits == lastAutoLookedUpCpf && currentCpfDigits.length == 11) {
+                val isDiff = recipientName.trim().isNotBlank() &&
+                        com.example.util.AddressNormalizer.normalize(recipientName.trim()) != com.example.util.AddressNormalizer.normalize(offName)
+                if (isDiff) {
+                    apiNameCorrectionSuggestion = offName
+                    cpfLookupMessage = "⚠️ Divergência: Nome na API é '$offName'"
+                } else {
+                    apiNameCorrectionSuggestion = null
+                    if (recipientName.trim().isNotBlank()) {
+                        cpfLookupMessage = "✓ Nome verificado na API: $offName"
+                    }
+                }
+            } else {
+                apiNameCorrectionSuggestion = null
+                if (currentCpfDigits != lastAutoLookedUpCpf) {
+                    officialApiName = null
+                    if (cpfLookupMessage?.startsWith("✓") == true || cpfLookupMessage?.startsWith("⚠️") == true) {
+                        cpfLookupMessage = null
+                    }
+                }
+            }
+        }
+
+        LaunchedEffect(recipientName) {
+            val q = recipientName.trim()
+            // Evita disparar busca redundante e congelamento quando o documento já foi informado/encontrado
+            if (q.length >= 3 && recipientDocument.isBlank() && lastAutoLookedUpCpf.isBlank()) {
+                delay(350)
+                try {
+                    val match = com.example.util.SavedRecipientLookupHelper.findByName(q)
+                    if (match != null && (match.documento.isNotBlank() || match.assinatura.isNotBlank())) {
+                        savedRecipientFoundByName = match
+                        val isExact = com.example.util.AddressNormalizer.normalize(match.nome) == com.example.util.AddressNormalizer.normalize(q)
+                        if (isExact) {
+                            if (recipientDocument.isBlank() && match.documento.isNotBlank()) {
+                                recipientDocument = match.documento
+                            }
+                            if (collectedSignatureData == null && match.assinatura.isNotBlank()) {
+                                try {
+                                    collectedSignatureData = SignatureData.fromJson(match.assinatura)
+                                } catch (_: Throwable) {}
+                            }
+                        }
+                    } else {
+                        savedRecipientFoundByName = null
+                    }
+                } catch (_: Throwable) {
+                    savedRecipientFoundByName = null
+                }
+            } else if (recipientDocument.isNotBlank()) {
+                savedRecipientFoundByName = null
+            } else {
+                savedRecipientFoundByName = null
+            }
+        }
+
         // Diálogo de Adicionar Complemento no Endereço Detectado
         var showAddComplementDialog by remember { mutableStateOf(false) }
         var newComplementInput by remember { mutableStateOf("") }
@@ -558,12 +797,69 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
         var isListeningChangeComp by remember { mutableStateOf(false) }
         var isExecutingChangeComplement by remember { mutableStateOf(false) }
 
+        val activeCityName = appSettings.selectedCity.ifBlank { "Monte Santo de Minas" }
+        var streetSuggestions by remember { mutableStateOf<List<StreetCatalog>>(emptyList()) }
+        var searchStreetMatch by remember { mutableStateOf<StreetCatalog?>(null) }
+
+        // Sugestões de ruas ao digitar logradouro na aba Endereço
+        androidx.compose.runtime.LaunchedEffect(editedStreet, editModalTab) {
+            val query = editedStreet.trim()
+            if (editModalTab == "ADDRESS" && query.length >= 2) {
+                delay(200)
+                try {
+                    val app = applicationContext as? DeliveryApp
+                    val repo = app?.streetCatalogRepository
+                    if (repo != null) {
+                        streetSuggestions = repo.searchStreetsSync(query, activeCityName, limit = 6)
+                    }
+                } catch (_: Exception) {
+                    streetSuggestions = emptyList()
+                }
+            } else {
+                streetSuggestions = emptyList()
+            }
+        }
+
+        // Correspondência de logradouro para a busca no assistente
+        androidx.compose.runtime.LaunchedEffect(searchModalQuery) {
+            val query = searchModalQuery.trim()
+            if (query.length >= 2) {
+                delay(200)
+                try {
+                    val app = applicationContext as? DeliveryApp
+                    val repo = app?.streetCatalogRepository
+                    if (repo != null) {
+                        val matches = repo.searchStreetsSync(query, activeCityName, limit = 1)
+                        searchStreetMatch = matches.firstOrNull()
+                    }
+                } catch (_: Exception) {
+                    searchStreetMatch = null
+                }
+            } else {
+                searchStreetMatch = null
+            }
+        }
+
         // Proteção e recuperação automática de rascunho não salvo
         androidx.compose.runtime.LaunchedEffect(isEditModalOpen) {
             if (isEditModalOpen) {
                 val draft = RecipientDraftManager.getDraft(this@FloatingBubbleService)
-                if (draft != null && recipientName.isBlank() && recipientDocument.isBlank() && collectedSignatureData == null) {
-                    draftAvailable = draft
+                if (draft != null) {
+                    if (editedStreet.isBlank() && editedNumber.isBlank() && editedComplement.isBlank() && editedNeighborhood.isBlank() && recipientName.isBlank() && recipientDocument.isBlank() && collectedSignatureData == null) {
+                        editedStreet = draft.street
+                        editedNumber = draft.number
+                        editedComplement = draft.complement
+                        editedNeighborhood = draft.neighborhood
+                        recipientName = draft.name
+                        recipientDocument = draft.document
+                        if (draft.signatureJson.isNotBlank()) {
+                            try {
+                                collectedSignatureData = SignatureData.fromJson(draft.signatureJson)
+                            } catch (_: Exception) {}
+                        }
+                    } else {
+                        draftAvailable = draft
+                    }
                 } else {
                     draftAvailable = null
                 }
@@ -572,12 +868,13 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             }
         }
 
-        // Salva rascunho automaticamente conforme o usuário preenche dados
+        // Salva rascunho automaticamente conforme o usuário preenche qualquer dado (com debounce para não travar a UI)
         androidx.compose.runtime.LaunchedEffect(
             isEditModalOpen, editedStreet, editedNumber, editedComplement, editedNeighborhood,
             recipientName, recipientDocument, collectedSignatureData
         ) {
-            if (isEditModalOpen && (recipientName.isNotBlank() || recipientDocument.isNotBlank() || collectedSignatureData != null)) {
+            if (isEditModalOpen) {
+                delay(500)
                 RecipientDraftManager.saveDraft(
                     context = this@FloatingBubbleService,
                     street = editedStreet,
@@ -593,13 +890,20 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
         val hasUnsavedEditChanges by remember {
             androidx.compose.runtime.derivedStateOf {
+                val sigChanged = if (collectedSignatureData == null) {
+                    initialCollectedSigJson.isNotBlank()
+                } else if (initialCollectedSigJson.isBlank()) {
+                    collectedSignatureData?.strokes?.isNotEmpty() == true
+                } else {
+                    false
+                }
                 editedStreet.trim() != initialEditedStreet.trim() ||
                         editedNumber.trim() != initialEditedNumber.trim() ||
                         editedComplement.trim() != initialEditedComplement.trim() ||
                         editedNeighborhood.trim() != initialEditedNeighborhood.trim() ||
                         recipientName.trim() != initialRecipientName.trim() ||
                         recipientDocument.trim() != initialRecipientDocument.trim() ||
-                        (collectedSignatureData?.toJson() ?: "") != initialCollectedSigJson
+                        sigChanged
             }
         }
 
@@ -608,6 +912,11 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                 if (hasUnsavedEditChanges) {
                     showDiscardEditConfirmDialog = true
                 } else {
+                    officialApiName = null
+                    apiNameCorrectionSuggestion = null
+                    cpfLookupMessage = null
+                    lastAutoLookedUpCpf = ""
+                    savedRecipientFoundByName = null
                     isEditModalOpen = false
                     updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
                 }
@@ -671,6 +980,12 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             initialRecipientDocument = initialDoc
             initialCollectedSigJson = sigStr
 
+            officialApiName = null
+            apiNameCorrectionSuggestion = null
+            cpfLookupMessage = null
+            lastAutoLookedUpCpf = ""
+            savedRecipientFoundByName = null
+
             editModalTab = tab
             isMultipleRecipientsModalOpen = false
             isEditModalOpen = true
@@ -720,6 +1035,12 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             initialRecipientName = ""
             initialRecipientDocument = ""
             initialCollectedSigJson = ""
+
+            officialApiName = null
+            apiNameCorrectionSuggestion = null
+            cpfLookupMessage = null
+            lastAutoLookedUpCpf = ""
+            savedRecipientFoundByName = null
 
             editModalTab = "RESIDENT"
             isSearchModalOpen = false
@@ -782,8 +1103,20 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
         val isAnyModalOpen = isSignatureFullScreen || isSearchModalOpen || isEditModalOpen || isMultipleRecipientsModalOpen || showMoveOrCopyDialog || showAddComplementDialog || showDeleteReceiverConfirmDialog || showChangeComplementDialog
 
+        LaunchedEffect(isExpanded, isAnyModalOpen, isSignatureFullScreen) {
+            if (isSignatureFullScreen) {
+                updateWindowLayoutMode(OverlayMode.FULLSCREEN_SIGNATURE)
+            } else if (isAnyModalOpen) {
+                updateWindowLayoutMode(OverlayMode.MODAL)
+            } else if (isExpanded) {
+                updateWindowLayoutMode(OverlayMode.PANEL)
+            } else {
+                updateWindowLayoutMode(OverlayMode.BUBBLE)
+            }
+        }
+
         Box(
-            modifier = if (isAnyModalOpen) Modifier.fillMaxSize() else Modifier.padding(8.dp),
+            modifier = if (isAnyModalOpen) Modifier.fillMaxSize() else Modifier,
             contentAlignment = Alignment.Center
         ) {
             // Fundo escurecido e desfocado com suporte a fechar ao tocar fora do modal
@@ -849,7 +1182,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             collectedSignatureData = signature
                             isSignatureFullScreen = false
                             updateWindowLayoutMode(OverlayMode.MODAL)
-                            Toast.makeText(this@FloatingBubbleService, "Assinatura gravada!", Toast.LENGTH_SHORT).show()
+                            ToastHelper.show(this@FloatingBubbleService, "Assinatura gravada!")
                         },
                         onCancel = {
                             isSignatureFullScreen = false
@@ -857,7 +1190,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                         }
                     )
                 }
-            } else if (isSearchModalOpen) {
+             } else if (isSearchModalOpen) {
                 // MODAL DE PESQUISA DE DESTINATÁRIOS SALVOS
                 var executedQuery by remember { mutableStateOf("") }
                 var isSearching by remember { mutableStateOf(false) }
@@ -983,7 +1316,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 isListeningSearch = true
                                                 com.example.util.SpeechHelper.startListening(
                                                     context = serviceContext,
-                                                    onReady = { Toast.makeText(serviceContext, "Fale o nome, documento ou rua...", Toast.LENGTH_SHORT).show() },
+                                                    onReady = { ToastHelper.show(serviceContext, "Fale o nome, documento ou rua...") },
                                                     onResult = { result ->
                                                         isListeningSearch = false
                                                         val clean = com.example.util.SpeechHelper.processSpokenSearch(result)
@@ -994,7 +1327,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     },
                                                     onError = { err ->
                                                         isListeningSearch = false
-                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(serviceContext, err)
                                                     }
                                                 )
                                             }
@@ -1032,6 +1365,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
+
 
                         // Barra de Ação Rápida de Cadastro na Busca
                         Row(
@@ -1376,18 +1710,56 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                             }
                                                         }
                                                     }
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .clip(RoundedCornerShape(6.dp))
-                                                            .background(Color(0xFFEDE7F6))
-                                                            .padding(horizontal = 6.dp, vertical = 3.dp)
-                                                    ) {
-                                                        Text(
-                                                            text = "🏢 ${group.complements.size} compl.",
-                                                            fontSize = 9.5.sp,
-                                                            fontWeight = FontWeight.Bold,
-                                                            color = Color(0xFF4A148C)
-                                                        )
+                                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .clip(RoundedCornerShape(6.dp))
+                                                                .background(Color(0xFFEDE7F6))
+                                                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = "🏢 ${group.complements.size} compl.",
+                                                                fontSize = 9.5.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = Color(0xFF4A148C)
+                                                            )
+                                                        }
+                                                        Surface(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            color = Color(0xFF2E7D32),
+                                                            modifier = Modifier.clickable {
+                                                                val selComp = searchModalSelectedComplements[group.addressKey]?.takeIf { it != "__NONE__" }
+                                                                AccessibilityAutomationEngine.selectAddressGroup(
+                                                                    street = group.street,
+                                                                    number = group.number,
+                                                                    neighborhood = group.neighborhood,
+                                                                    allHousePersons = group.allPersons,
+                                                                    initialComplement = selComp
+                                                                )
+                                                                isSearchModalOpen = false
+                                                                updateWindowLayoutMode(OverlayMode.PANEL)
+                                                                ToastHelper.show(serviceContext, "Endereço selecionado! (${group.complements.size} complementos)")
+                                                            }
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.Check,
+                                                                    contentDescription = null,
+                                                                    tint = Color.White,
+                                                                    modifier = Modifier.size(11.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(2.dp))
+                                                                Text(
+                                                                    text = "Selecionar Endereço",
+                                                                    fontSize = 9.5.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = Color.White
+                                                                )
+                                                            }
+                                                        }
                                                     }
                                                 }
 
@@ -1662,11 +2034,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                                                         AccessibilityAutomationEngine.selectRecebedor(r)
                                                                                         isSearchModalOpen = false
                                                                                         updateWindowLayoutMode(OverlayMode.PANEL)
-                                                                                        Toast.makeText(
-                                                                                            serviceContext,
-                                                                                            "Selecionado: ${r.nome}",
-                                                                                            Toast.LENGTH_SHORT
-                                                                                        ).show()
+                                                                                        ToastHelper.show(serviceContext, "Selecionado: ${r.nome}")
                                                                                     }
                                                                                 ) {
                                                                                     Row(
@@ -1697,11 +2065,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                                                 }
                                                                                 isSearchModalOpen = false
                                                                                 updateWindowLayoutMode(OverlayMode.PANEL)
-                                                                                Toast.makeText(
-                                                                                    serviceContext,
-                                                                                    "Selecionado: ${itemPerson.nome}",
-                                                                                    Toast.LENGTH_SHORT
-                                                                                ).show()
+                                                                                ToastHelper.show(serviceContext, "Selecionado: ${itemPerson.nome}")
                                                                             },
                                                                             modifier = Modifier.weight(1.05f).height(32.dp),
                                                                             contentPadding = PaddingValues(horizontal = 2.dp),
@@ -1722,7 +2086,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                                                     AccessibilityAutomationEngine.prioritizeRecebedor(selRec)
                                                                                 }
                                                                                 val res = AccessibilityAutomationEngine.fillFields(itemPerson.nome, itemPerson.documento)
-                                                                                Toast.makeText(serviceContext, res.message, Toast.LENGTH_SHORT).show()
+                                                                                ToastHelper.show(serviceContext, res.message)
                                                                                 if (res.nameFilled || res.documentFilled) {
                                                                                     triggerSuccessFeedback()
                                                                                 }
@@ -1861,25 +2225,56 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                             }
                                                         }
                                                     }
-                                                    Surface(
-                                                        shape = RoundedCornerShape(6.dp),
-                                                        color = Color(0xFFEDE7F6),
-                                                        modifier = Modifier.clickable {
-                                                            openRegisterNewResidentForAddress(group.allPersons.firstOrNull())
-                                                        }
-                                                    ) {
-                                                        Row(
-                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                                                            verticalAlignment = Alignment.CenterVertically
+                                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                        Surface(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            color = Color(0xFF2E7D32),
+                                                            modifier = Modifier.clickable {
+                                                                AccessibilityAutomationEngine.selectAddressGroup(
+                                                                    street = group.street,
+                                                                    number = group.number,
+                                                                    neighborhood = group.neighborhood,
+                                                                    allHousePersons = group.allPersons
+                                                                )
+                                                                isSearchModalOpen = false
+                                                                updateWindowLayoutMode(OverlayMode.PANEL)
+                                                                ToastHelper.show(serviceContext, "Endereço selecionado!")
+                                                            }
                                                         ) {
-                                                            Icon(Icons.Default.Add, contentDescription = null, tint = Color(0xFF6A1B9A), modifier = Modifier.size(11.dp))
-                                                            Spacer(modifier = Modifier.width(2.dp))
-                                                            Text(
-                                                                text = "Adicionar Complemento",
-                                                                fontSize = 10.sp,
-                                                                fontWeight = FontWeight.Bold,
-                                                                color = Color(0xFF6A1B9A)
-                                                            )
+                                                            Row(
+                                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(11.dp))
+                                                                Spacer(modifier = Modifier.width(2.dp))
+                                                                Text(
+                                                                    text = "Selecionar Endereço",
+                                                                    fontSize = 9.5.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = Color.White
+                                                                )
+                                                            }
+                                                        }
+                                                        Surface(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            color = Color(0xFFEDE7F6),
+                                                            modifier = Modifier.clickable {
+                                                                openRegisterNewResidentForAddress(group.allPersons.firstOrNull())
+                                                            }
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Icon(Icons.Default.Add, contentDescription = null, tint = Color(0xFF6A1B9A), modifier = Modifier.size(11.dp))
+                                                                Spacer(modifier = Modifier.width(2.dp))
+                                                                Text(
+                                                                    text = "Adicionar Complemento",
+                                                                    fontSize = 10.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = Color(0xFF6A1B9A)
+                                                                )
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -2011,11 +2406,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                                                 AccessibilityAutomationEngine.selectRecebedor(r)
                                                                                 isSearchModalOpen = false
                                                                                 updateWindowLayoutMode(OverlayMode.PANEL)
-                                                                                Toast.makeText(
-                                                                                    serviceContext,
-                                                                                    "Selecionado: ${r.nome}",
-                                                                                    Toast.LENGTH_SHORT
-                                                                                ).show()
+                                                                                ToastHelper.show(serviceContext, "Selecionado: ${r.nome}")
                                                                             }
                                                                         ) {
                                                                             Row(
@@ -2046,11 +2437,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                                         }
                                                                         isSearchModalOpen = false
                                                                         updateWindowLayoutMode(OverlayMode.PANEL)
-                                                                        Toast.makeText(
-                                                                            serviceContext,
-                                                                            "Selecionado: ${itemPerson.nome}",
-                                                                            Toast.LENGTH_SHORT
-                                                                        ).show()
+                                                                        ToastHelper.show(serviceContext, "Selecionado: ${itemPerson.nome}")
                                                                     },
                                                                     modifier = Modifier.weight(1.05f).height(32.dp),
                                                                     contentPadding = PaddingValues(horizontal = 2.dp),
@@ -2071,7 +2458,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                                             AccessibilityAutomationEngine.prioritizeRecebedor(selRec)
                                                                         }
                                                                         val res = AccessibilityAutomationEngine.fillFields(itemPerson.nome, itemPerson.documento)
-                                                                        Toast.makeText(serviceContext, res.message, Toast.LENGTH_SHORT).show()
+                                                                        ToastHelper.show(serviceContext, res.message)
                                                                         if (res.nameFilled || res.documentFilled) {
                                                                             triggerSuccessFeedback()
                                                                         }
@@ -2174,12 +2561,12 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                         colors = CardDefaults.cardColors(containerColor = Color.White),
                         elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
                     ) {
-                    Column(
-                        modifier = Modifier
-                            .padding(16.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
+                        Column(
+                            modifier = Modifier
+                                .padding(16.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
                         // Cabeçalho do Modal
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -2263,7 +2650,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     collectedSignatureData = SignatureData.fromJson(draft.signatureJson)
                                                 }
                                                 draftAvailable = null
-                                                Toast.makeText(this@FloatingBubbleService, "Rascunho recuperado!", Toast.LENGTH_SHORT).show()
+                                                ToastHelper.show(this@FloatingBubbleService, "Rascunho recuperado!")
                                             },
                                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                         ) {
@@ -2391,7 +2778,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 isListeningStreet = true
                                                 com.example.util.SpeechHelper.startListening(
                                                     context = serviceContext,
-                                                    onReady = { Toast.makeText(serviceContext, "Fale a rua...", Toast.LENGTH_SHORT).show() },
+                                                    onReady = { ToastHelper.show(serviceContext, "Fale a rua...") },
                                                     onResult = { result ->
                                                         isListeningStreet = false
                                                         val parsed = AddressNormalizer.parseAddressComponents(result)
@@ -2407,7 +2794,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     },
                                                     onError = { err ->
                                                         isListeningStreet = false
-                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(serviceContext, err)
                                                     }
                                                 )
                                             }
@@ -2425,6 +2812,51 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
                             )
+
+                            if (streetSuggestions.isNotEmpty()) {
+                                Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp)) {
+                                    Text(
+                                        text = "📍 Sugestões de Ruas ($activeCityName):",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF2E7D32)
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        items(streetSuggestions) { sugg ->
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = Color(0xFFE8F5E9),
+                                                border = BorderStroke(1.dp, Color(0xFFA5D6A7)),
+                                                modifier = Modifier.clickable {
+                                                    editedStreet = sugg.nomeCompleto
+                                                    if (editedNeighborhood.isBlank()) {
+                                                        editedNeighborhood = sugg.bairro
+                                                    }
+                                                    streetSuggestions = emptyList()
+                                                }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(11.dp))
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text(
+                                                        text = "${sugg.nomeCompleto}${if (sugg.bairro.isNotBlank()) " (${sugg.bairro})" else ""}",
+                                                        fontSize = 10.5.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = Color(0xFF1B5E20)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -2448,7 +2880,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                         isListeningNumber = true
                                                         com.example.util.SpeechHelper.startListening(
                                                             context = serviceContext,
-                                                            onReady = { Toast.makeText(serviceContext, "Fale o número...", Toast.LENGTH_SHORT).show() },
+                                                            onReady = { ToastHelper.show(serviceContext, "Fale o número...") },
                                                             onResult = { result ->
                                                                 isListeningNumber = false
                                                                 val num = com.example.util.SpeechHelper.processSpokenNumber(result)
@@ -2456,7 +2888,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                             },
                                                             onError = { err ->
                                                                 isListeningNumber = false
-                                                                Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                                ToastHelper.show(serviceContext, err)
                                                             }
                                                         )
                                                     }
@@ -2494,7 +2926,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                         isListeningComplement = true
                                                         com.example.util.SpeechHelper.startListening(
                                                             context = serviceContext,
-                                                            onReady = { Toast.makeText(serviceContext, "Fale o complemento...", Toast.LENGTH_SHORT).show() },
+                                                            onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
                                                             onResult = { result ->
                                                                 isListeningComplement = false
                                                                 val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
@@ -2502,7 +2934,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                             },
                                                             onError = { err ->
                                                                 isListeningComplement = false
-                                                                Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                                ToastHelper.show(serviceContext, err)
                                                             }
                                                         )
                                                     }
@@ -2572,7 +3004,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 isListeningNeighborhood = true
                                                 com.example.util.SpeechHelper.startListening(
                                                     context = serviceContext,
-                                                    onReady = { Toast.makeText(serviceContext, "Fale o bairro...", Toast.LENGTH_SHORT).show() },
+                                                    onReady = { ToastHelper.show(serviceContext, "Fale o bairro...") },
                                                     onResult = { result ->
                                                         isListeningNeighborhood = false
                                                         val br = com.example.util.SpeechHelper.processSpokenNeighborhood(result)
@@ -2580,7 +3012,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     },
                                                     onError = { err ->
                                                         isListeningNeighborhood = false
-                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(serviceContext, err)
                                                     }
                                                 )
                                             }
@@ -2771,7 +3203,12 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             )
                             OutlinedTextField(
                                 value = recipientName,
-                                onValueChange = { recipientName = it },
+                                onValueChange = { input ->
+                                    recipientName = input
+                                    if (apiNameCorrectionSuggestion != null && input.trim().equals(apiNameCorrectionSuggestion!!.trim(), ignoreCase = true)) {
+                                        apiNameCorrectionSuggestion = null
+                                    }
+                                },
                                 placeholder = { Text("Ex: Maria da Silva", fontSize = 12.sp) },
                                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                                 trailingIcon = {
@@ -2781,7 +3218,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 isListeningName = true
                                                 com.example.util.SpeechHelper.startListening(
                                                     context = serviceContext,
-                                                    onReady = { Toast.makeText(serviceContext, "Fale o nome...", Toast.LENGTH_SHORT).show() },
+                                                    onReady = { ToastHelper.show(serviceContext, "Fale o nome...") },
                                                     onResult = { result ->
                                                         isListeningName = false
                                                         val processed = com.example.util.SpeechHelper.processSpokenName(result)
@@ -2791,7 +3228,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     },
                                                     onError = { err ->
                                                         isListeningName = false
-                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(serviceContext, err)
                                                     }
                                                 )
                                             }
@@ -2808,6 +3245,109 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 singleLine = true
                             )
 
+                            if (apiNameCorrectionSuggestion != null) {
+                                val officialName = apiNameCorrectionSuggestion!!
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFFFFF8E1),
+                                    border = BorderStroke(1.dp, Color(0xFFFFB300)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            recipientName = officialName
+                                            apiNameCorrectionSuggestion = null
+                                            ToastHelper.show(serviceContext, "Nome corrigido para o oficial!")
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFE65100), modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "⚠️ Divergência com a base oficial da API",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFB71C1C)
+                                            )
+                                            Text(
+                                                text = "Cadastrado: '${recipientName}'",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF5D4037)
+                                            )
+                                            Text(
+                                                text = "Oficial na API: '${officialName}'",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF1B5E20)
+                                            )
+                                            Text(
+                                                text = "👉 Toque aqui para corrigir para o nome oficial",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFE65100)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (savedRecipientFoundByName != null) {
+                                val match = savedRecipientFoundByName!!
+                                val hasDoc = match.documento.isNotBlank()
+                                val hasSig = match.assinatura.isNotBlank()
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFFE8F5E9),
+                                    border = BorderStroke(1.dp, Color(0xFFA5D6A7)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            recipientName = match.nome
+                                            if (hasDoc) {
+                                                recipientDocument = match.documento
+                                            }
+                                            if (hasSig) {
+                                                try {
+                                                    collectedSignatureData = SignatureData.fromJson(match.assinatura)
+                                                } catch (_: Throwable) {}
+                                            }
+                                            savedRecipientFoundByName = null
+                                            ToastHelper.show(serviceContext, "Dados recuperados do banco!")
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Recebedor salvo: ${match.nome}",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF1B5E20)
+                                            )
+                                            Text(
+                                                text = buildString {
+                                                    if (hasDoc) append("Doc: ${match.documento} ")
+                                                    if (hasSig) append("• ✓ Assinatura disponível ")
+                                                    append("(Toque para puxar)")
+                                                },
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF2E7D32)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Card com cota e uso da API de consulta CPF
+                            com.example.ui.components.CpfApiQuotaCard()
+
                             // Documento do Recebedor (numérico)
                             Text(
                                 text = "Documento do Recebedor (CPF / RG):",
@@ -2822,10 +3362,22 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             OutlinedTextField(
                                 value = recipientDocument,
                                 onValueChange = { input ->
-                                    recipientDocument = input.filter { it.isLetterOrDigit() || it == '.' || it == '-' }
+                                    val filtered = input.filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '/' || it == ' ' }.uppercase(java.util.Locale.ROOT)
+                                    recipientDocument = filtered
+                                    val digits = filtered.filter { it.isDigit() }
+                                    // Prioridade máxima da API: pesquisa automaticamente assim que atinge 11 dígitos de CPF
+                                    if (digits.length == 11 && digits != lastAutoLookedUpCpf) {
+                                        performCpfLookup(digits)
+                                    } else if (filtered.any { it.isLetter() } && filtered.length >= 6 && filtered != lastAutoLookedUpCpf) {
+                                        // Documento com letras (ex: RG com sigla estadual MG-12345678)
+                                        performCpfLookup(filtered)
+                                    }
                                 },
-                                placeholder = { Text("Ex: 123.456.789-00", fontSize = 12.sp) },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                                placeholder = { Text("Ex: 123.456.789-00 ou RG", fontSize = 12.sp) },
+                                keyboardOptions = KeyboardOptions(
+                                    capitalization = KeyboardCapitalization.Characters,
+                                    keyboardType = KeyboardType.Text
+                                ),
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = when (isDocValidState) {
                                         true -> Color(0xFF2E7D32)
@@ -2839,40 +3391,85 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     }
                                 ),
                                 supportingText = {
-                                    when (isDocValidState) {
-                                        true -> Text("Documento válido", color = Color(0xFF2E7D32), fontSize = 11.sp)
-                                        false -> Text("Documento inválido", color = Color(0xFFD32F2F), fontSize = 11.sp)
-                                        null -> null
+                                    if (cpfLookupMessage != null) {
+                                        Text(
+                                            text = cpfLookupMessage!!,
+                                            color = if (cpfLookupMessage!!.startsWith("✓")) Color(0xFF2E7D32) else Color(0xFFD32F2F),
+                                            fontSize = 10.5.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    } else {
+                                        val formDocDigits = recipientDocument.filter { it.isDigit() }
+                                        if (formDocDigits.length == 11 && verifiedCpfsMap.containsKey(formDocDigits)) {
+                                            Text("✓ CPF verificado e validado na base oficial da API", color = Color(0xFF2E7D32), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                                        } else {
+                                            when (isDocValidState) {
+                                                true -> Text("Documento válido", color = Color(0xFF2E7D32), fontSize = 11.sp)
+                                                false -> Text("Documento inválido", color = Color(0xFFD32F2F), fontSize = 11.sp)
+                                                null -> null
+                                            }
+                                        }
                                     }
                                 },
                                 trailingIcon = {
-                                    IconButton(
-                                        onClick = {
-                                            if (!isListeningDoc) {
-                                                isListeningDoc = true
-                                                com.example.util.SpeechHelper.startListening(
-                                                    context = serviceContext,
-                                                    onReady = { Toast.makeText(serviceContext, "Fale os números do documento...", Toast.LENGTH_SHORT).show() },
-                                                    onResult = { result ->
-                                                        isListeningDoc = false
-                                                        val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
-                                                        if (processed.isNotBlank()) {
-                                                            recipientDocument = processed
-                                                        }
-                                                    },
-                                                    onError = { err ->
-                                                        isListeningDoc = false
-                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
-                                                    }
-                                                )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (isLookingUpCpfOnline) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp).padding(end = 4.dp),
+                                                strokeWidth = 2.dp,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        } else {
+                                            val digits = recipientDocument.filter { it.isDigit() }
+                                            if (digits.length == 11 || recipientDocument.trim().length >= 5) {
+                                                IconButton(
+                                                    onClick = { performCpfLookup(recipientDocument) },
+                                                    modifier = Modifier.size(32.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Search,
+                                                        contentDescription = "Consultar Documento",
+                                                        tint = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
                                             }
                                         }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Mic,
-                                            contentDescription = "Falar Documento",
-                                            tint = if (isListeningDoc) MaterialTheme.colorScheme.primary else Color.Gray
-                                        )
+                                        IconButton(
+                                            onClick = {
+                                                if (!isListeningDoc) {
+                                                    isListeningDoc = true
+                                                    com.example.util.SpeechHelper.startListening(
+                                                        context = serviceContext,
+                                                        onReady = { ToastHelper.show(serviceContext, "Fale os números do documento...") },
+                                                        onResult = { result ->
+                                                            isListeningDoc = false
+                                                            val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
+                                                            if (processed.isNotBlank()) {
+                                                                val upper = processed.uppercase(java.util.Locale.ROOT)
+                                                                recipientDocument = upper
+                                                                val digits = upper.filter { it.isDigit() }
+                                                                if (digits.length == 11 && digits != lastAutoLookedUpCpf) {
+                                                                    performCpfLookup(digits)
+                                                                }
+                                                            }
+                                                        },
+                                                        onError = { err ->
+                                                            isListeningDoc = false
+                                                            ToastHelper.show(serviceContext, err)
+                                                        }
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Mic,
+                                                contentDescription = "Falar Documento",
+                                                tint = if (isListeningDoc) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
@@ -2921,7 +3518,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     isListeningComplement = true
                                                     com.example.util.SpeechHelper.startListening(
                                                         context = serviceContext,
-                                                        onReady = { Toast.makeText(serviceContext, "Fale o complemento...", Toast.LENGTH_SHORT).show() },
+                                                        onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
                                                         onResult = { result ->
                                                             isListeningComplement = false
                                                             val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
@@ -2929,7 +3526,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                         },
                                                         onError = { err ->
                                                             isListeningComplement = false
-                                                            Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                            ToastHelper.show(serviceContext, err)
                                                         }
                                                     )
                                                 }
@@ -3152,15 +3749,31 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     if (isSavingRecipient) return@Button
 
                                     // Validação da rua/logradouro
-                                    if (editedStreet.trim().isBlank()) {
-                                        Toast.makeText(this@FloatingBubbleService, "Informe o logradouro / rua na aba Endereço!", Toast.LENGTH_SHORT).show()
+                                    val trimmedStreet = editedStreet.trim()
+                                    if (trimmedStreet.isBlank()) {
+                                        ToastHelper.show(this@FloatingBubbleService, "Informe o logradouro / rua na aba Endereço!")
+                                        editModalTab = "ADDRESS"
+                                        return@Button
+                                    }
+
+                                    // Validação obrigatória do número do imóvel junto com a rua
+                                    val trimmedNum = editedNumber.trim()
+                                    if (trimmedNum.isBlank()) {
+                                        ToastHelper.show(this@FloatingBubbleService, "Informe o número do endereço na aba Endereço!")
+                                        editModalTab = "ADDRESS"
+                                        return@Button
+                                    }
+
+                                    val strippedStreet = AddressNormalizer.stripStreetType(trimmedStreet)
+                                    if (strippedStreet.isBlank() || strippedStreet.all { it.isDigit() || it == '-' || it == ',' || it == '.' }) {
+                                        ToastHelper.show(this@FloatingBubbleService, "Informe o nome da rua e o número juntos!")
                                         editModalTab = "ADDRESS"
                                         return@Button
                                     }
 
                                     // Validação do nome do morador
                                     if (recipientName.trim().isBlank()) {
-                                        Toast.makeText(this@FloatingBubbleService, "Informe o nome do morador na aba Morador!", Toast.LENGTH_SHORT).show()
+                                        ToastHelper.show(this@FloatingBubbleService, "Informe o nome do morador na aba Morador!")
                                         editModalTab = "RESIDENT"
                                         return@Button
                                     }
@@ -3179,46 +3792,96 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                             try {
                                                 val existing = DeliveryApp.instance.personRepository.getPersonByIdDirect(editingPersonId!!)
                                                 if (existing != null) {
-                                                    val oldPrimary = Recebedor(
-                                                        id = java.util.UUID.randomUUID().toString().take(8),
-                                                        nome = existing.nome,
-                                                        documento = existing.documento,
-                                                        assinatura = existing.assinatura,
-                                                        dataUso = existing.dataAtualizacao
-                                                    )
-                                                    val existingExtras = Recebedor.listFromJson(existing.coRecebedoresJson).toMutableList()
-                                                    val newExtras = mutableListOf<Recebedor>()
-                                                    if (oldPrimary.nome.isNotBlank()) {
-                                                        newExtras.add(oldPrimary)
-                                                    }
-                                                    newExtras.addAll(existingExtras)
-
-                                                    val updated = existing.copy(
-                                                        nome = formattedRecipientName,
-                                                        documento = recipientDocument.trim(),
-                                                        endereco = finalStreet,
-                                                        numero = finalNum,
-                                                        complemento = finalComp,
-                                                        bairro = finalBairro,
-                                                        assinatura = sigJson,
-                                                        coRecebedoresJson = Recebedor.listToJson(newExtras),
-                                                        dataAtualizacao = System.currentTimeMillis()
-                                                    )
-                                                    DeliveryApp.instance.personRepository.updatePerson(updated)
-                                                    withContext(Dispatchers.Main) {
-                                                        AccessibilityAutomationEngine.setMatchedPersonDirect(updated)
-                                                        val allRecs = AccessibilityAutomationEngine.extractAllRecebedores(listOf(updated))
-                                                        val newMainRec = allRecs.firstOrNull { it.id == "p_${updated.id}_main" } ?: allRecs.firstOrNull()
-                                                        if (newMainRec != null) {
-                                                            AccessibilityAutomationEngine.selectRecebedor(newMainRec)
+                                                    val savedPerson: Person
+                                                    val targetRecId: String
+                                                    if (finalComp == existing.complemento) {
+                                                        // Novo morador no mesmo complemento: torna-se o primeiro da lista para assinar imediatamente
+                                                        val oldMainAsExtra = Recebedor(
+                                                            id = java.util.UUID.randomUUID().toString().take(8),
+                                                            nome = existing.nome,
+                                                            documento = existing.documento,
+                                                            assinatura = existing.assinatura,
+                                                            dataUso = existing.dataAtualizacao
+                                                        )
+                                                        val existingExtras = Recebedor.listFromJson(existing.coRecebedoresJson).toMutableList()
+                                                        val newExtras = mutableListOf<Recebedor>()
+                                                        if (oldMainAsExtra.nome.isNotBlank()) {
+                                                            newExtras.add(oldMainAsExtra)
                                                         }
-                                                        Toast.makeText(
-                                                            this@FloatingBubbleService,
-                                                            "Novo morador e endereço salvos!",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
+                                                        newExtras.addAll(existingExtras)
+
+                                                        val updated = existing.copy(
+                                                            nome = formattedRecipientName,
+                                                            documento = recipientDocument.trim(),
+                                                            assinatura = sigJson,
+                                                            coRecebedoresJson = Recebedor.listToJson(newExtras),
+                                                            dataAtualizacao = System.currentTimeMillis()
+                                                        )
+                                                        DeliveryApp.instance.personRepository.updatePerson(updated)
+                                                        savedPerson = updated
+                                                        targetRecId = "p_${existing.id}_main"
+                                                    } else {
+                                                        // Complemento específico para este novo morador: não altera o endereço dos outros moradores
+                                                        val searchKey = "$finalStreet, $finalNum"
+                                                        val existingList = DeliveryApp.instance.personRepository.findPersonsByAddress(searchKey)
+                                                        val targetHouse = existingList.firstOrNull {
+                                                            it.id != existing.id &&
+                                                            AddressNormalizer.areStreetNamesMatching(it.endereco, finalStreet) &&
+                                                            AddressNormalizer.areNumbersMatching(it.numero, finalNum) &&
+                                                            (if (finalComp.isNotBlank()) it.complemento.trim().equals(finalComp.trim(), ignoreCase = true) else it.complemento.isBlank())
+                                                        }
+                                                        if (targetHouse != null) {
+                                                            val oldTargetMain = Recebedor(
+                                                                id = java.util.UUID.randomUUID().toString().take(8),
+                                                                nome = targetHouse.nome,
+                                                                documento = targetHouse.documento,
+                                                                assinatura = targetHouse.assinatura,
+                                                                dataUso = targetHouse.dataAtualizacao
+                                                            )
+                                                            val targetExtras = Recebedor.listFromJson(targetHouse.coRecebedoresJson).toMutableList()
+                                                            val newExtras = mutableListOf<Recebedor>()
+                                                            if (oldTargetMain.nome.isNotBlank()) {
+                                                                newExtras.add(oldTargetMain)
+                                                            }
+                                                            newExtras.addAll(targetExtras)
+
+                                                            val updatedTarget = targetHouse.copy(
+                                                                nome = formattedRecipientName,
+                                                                documento = recipientDocument.trim(),
+                                                                assinatura = sigJson,
+                                                                coRecebedoresJson = Recebedor.listToJson(newExtras),
+                                                                dataAtualizacao = System.currentTimeMillis()
+                                                            )
+                                                            DeliveryApp.instance.personRepository.updatePerson(updatedTarget)
+                                                            savedPerson = updatedTarget
+                                                            targetRecId = "p_${targetHouse.id}_main"
+                                                        } else {
+                                                            val newPerson = Person(
+                                                                nome = formattedRecipientName,
+                                                                documento = recipientDocument.trim(),
+                                                                endereco = finalStreet,
+                                                                numero = finalNum,
+                                                                complemento = finalComp,
+                                                                bairro = finalBairro.ifBlank { existing.bairro },
+                                                                assinatura = sigJson,
+                                                                coRecebedoresJson = "",
+                                                                dataAtualizacao = System.currentTimeMillis()
+                                                            )
+                                                            val newId = DeliveryApp.instance.personRepository.insertPerson(newPerson)
+                                                            savedPerson = newPerson.copy(id = newId)
+                                                            targetRecId = "p_${newId}_main"
+                                                        }
+                                                    }
+                                                    withContext(Dispatchers.Main) {
+                                                        AccessibilityAutomationEngine.notifyPersonSaved(savedPerson, targetRecId)
+                                                        ToastHelper.show(this@FloatingBubbleService, "Novo morador salvo!")
                                                         RecipientDraftManager.clearDraft(this@FloatingBubbleService)
                                                         draftAvailable = null
+                                                        officialApiName = null
+                                                        apiNameCorrectionSuggestion = null
+                                                        cpfLookupMessage = null
+                                                        lastAutoLookedUpCpf = ""
+                                                        savedRecipientFoundByName = null
                                                         isSavingRecipient = false
                                                         isEditModalOpen = false
                                                         updateWindowLayoutMode(OverlayMode.PANEL)
@@ -3230,87 +3893,178 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 com.example.util.CrashReporter.recordException(e, "SaveResidentExtra")
                                                 withContext(Dispatchers.Main) {
                                                     isSavingRecipient = false
-                                                    Toast.makeText(this@FloatingBubbleService, "Erro ao salvar morador: ${e.message ?: "Tente novamente"}", Toast.LENGTH_LONG).show()
+                                                    ToastHelper.showLong(this@FloatingBubbleService, "Erro ao salvar morador: ${e.message ?: "Tente novamente"}")
                                                 }
                                             }
                                         }
                                     } else if (isEditingExisting && editingPersonId != null) {
-                                        // Atualizar cadastro existente (endereço + dados do morador)
+                                        // Atualizar morador existente
                                         serviceScope.launch(Dispatchers.IO) {
                                             try {
                                                 val existing = DeliveryApp.instance.personRepository.getPersonByIdDirect(editingPersonId!!)
                                                 if (existing != null) {
-                                                    val isChangingCompForMultiReceivers = finalComp != existing.complemento &&
-                                                            (existing.coRecebedoresJson.isNotBlank() || (editingRecebedorId != null && !editingRecebedorId!!.startsWith("p_${existing.id}_main") && editingRecebedorId != "main"))
+                                                    val extras = Recebedor.listFromJson(existing.coRecebedoresJson).toMutableList()
+                                                    val isPrimary = editingRecebedorId == null || editingRecebedorId == "main" ||
+                                                            editingRecebedorId?.startsWith("p_${existing.id}_main") == true ||
+                                                            editingRecebedorId == "p_${existing.id}_main"
+                                                    val cleanCoId = if (!isPrimary && editingRecebedorId != null) editingRecebedorId!!.removePrefix("p_${existing.id}_co_") else null
 
-                                                    if (isChangingCompForMultiReceivers) {
-                                                        val targetRec = Recebedor(
-                                                            id = editingRecebedorId ?: "main",
+                                                    val totalResidentsInExisting = (if (existing.nome.isNotBlank() || existing.documento.isNotBlank()) 1 else 0) + extras.size
+                                                    val hasMultipleResidents = totalResidentsInExisting > 1
+                                                    val isCompChanging = finalComp != existing.complemento
+
+                                                    var savedPerson: Person = existing
+                                                    var targetRecipientIdToSelect: String? = editingRecebedorId
+
+                                                    if (hasMultipleResidents && isCompChanging) {
+                                                        // O morador atual está recebendo um complemento diferente: edita apenas este morador sem mexer nos outros!
+                                                        if (isPrimary) {
+                                                            // O morador editado era o principal de existing.
+                                                            // Promove o primeiro co-recebedor a novo principal de existing, preservando o complemento original para os outros.
+                                                            val newPrimary = extras.first()
+                                                            val remainingExtras = extras.drop(1)
+                                                            val updatedExisting = existing.copy(
+                                                                nome = newPrimary.nome,
+                                                                documento = newPrimary.documento,
+                                                                assinatura = newPrimary.assinatura,
+                                                                coRecebedoresJson = Recebedor.listToJson(remainingExtras),
+                                                                dataAtualizacao = System.currentTimeMillis()
+                                                            )
+                                                            DeliveryApp.instance.personRepository.updatePerson(updatedExisting)
+                                                        } else {
+                                                            // O morador editado era um co-recebedor.
+                                                            // Remove ele de existing, mantendo o principal e demais co-recebedores com o complemento original.
+                                                            val remainingExtras = extras.filterNot {
+                                                                it.id == cleanCoId || it.id == editingRecebedorId ||
+                                                                (it.nome.isNotBlank() && it.nome.equals(initialRecipientName.trim(), ignoreCase = true))
+                                                            }
+                                                            val updatedExisting = existing.copy(
+                                                                coRecebedoresJson = Recebedor.listToJson(remainingExtras),
+                                                                dataAtualizacao = System.currentTimeMillis()
+                                                            )
+                                                            DeliveryApp.instance.personRepository.updatePerson(updatedExisting)
+                                                        }
+
+                                                        // Salva o morador editado em sua nova unidade/complemento (finalComp)
+                                                        val searchKey = if (finalNum.isNotBlank()) "$finalStreet, $finalNum" else finalStreet
+                                                        val existingList = DeliveryApp.instance.personRepository.findPersonsByAddress(searchKey)
+                                                        val targetHouse = existingList.firstOrNull {
+                                                            it.id != existing.id &&
+                                                            AddressNormalizer.areNumbersMatching(it.numero, finalNum) &&
+                                                            (if (finalComp.isNotBlank()) {
+                                                                it.complemento.trim().equals(finalComp.trim(), ignoreCase = true) ||
+                                                                AddressNormalizer.normalize(it.complemento) == AddressNormalizer.normalize(finalComp)
+                                                            } else {
+                                                                it.complemento.isBlank()
+                                                            })
+                                                        }
+
+                                                        if (targetHouse != null) {
+                                                            if (targetHouse.nome.isBlank()) {
+                                                                val updatedTarget = targetHouse.copy(
+                                                                    nome = formattedRecipientName,
+                                                                    documento = recipientDocument.trim(),
+                                                                    assinatura = sigJson,
+                                                                    dataAtualizacao = System.currentTimeMillis()
+                                                                )
+                                                                DeliveryApp.instance.personRepository.updatePerson(updatedTarget)
+                                                                savedPerson = updatedTarget
+                                                                targetRecipientIdToSelect = "p_${targetHouse.id}_main"
+                                                            } else {
+                                                                val newRec = Recebedor(
+                                                                    id = java.util.UUID.randomUUID().toString().take(8),
+                                                                    nome = formattedRecipientName,
+                                                                    documento = recipientDocument.trim(),
+                                                                    assinatura = sigJson,
+                                                                    dataUso = System.currentTimeMillis()
+                                                                )
+                                                                val targetExtras = Recebedor.listFromJson(targetHouse.coRecebedoresJson).toMutableList()
+                                                                targetExtras.add(newRec)
+                                                                val updatedTarget = targetHouse.copy(
+                                                                    coRecebedoresJson = Recebedor.listToJson(targetExtras),
+                                                                    dataAtualizacao = System.currentTimeMillis()
+                                                                )
+                                                                DeliveryApp.instance.personRepository.updatePerson(updatedTarget)
+                                                                savedPerson = updatedTarget
+                                                                targetRecipientIdToSelect = newRec.id
+                                                            }
+                                                        } else {
+                                                            val newPerson = Person(
+                                                                nome = formattedRecipientName,
+                                                                documento = recipientDocument.trim(),
+                                                                endereco = finalStreet,
+                                                                numero = finalNum,
+                                                                complemento = finalComp,
+                                                                bairro = finalBairro.ifBlank { existing.bairro },
+                                                                assinatura = sigJson,
+                                                                coRecebedoresJson = "",
+                                                                dataCriacao = System.currentTimeMillis(),
+                                                                dataAtualizacao = System.currentTimeMillis()
+                                                            )
+                                                            val newId = DeliveryApp.instance.personRepository.insertPerson(newPerson)
+                                                            savedPerson = newPerson.copy(id = newId)
+                                                            targetRecipientIdToSelect = "p_${newId}_main"
+                                                        }
+                                                    } else if (!isCompChanging && hasMultipleResidents) {
+                                                        // Complemento inalterado, apenas atualiza dados específicos deste morador sem mexer nos outros
+                                                        if (isPrimary) {
+                                                            val updated = existing.copy(
+                                                                nome = formattedRecipientName,
+                                                                documento = recipientDocument.trim(),
+                                                                endereco = finalStreet,
+                                                                numero = finalNum,
+                                                                bairro = finalBairro,
+                                                                assinatura = sigJson,
+                                                                dataAtualizacao = System.currentTimeMillis()
+                                                            )
+                                                            DeliveryApp.instance.personRepository.updatePerson(updated)
+                                                            savedPerson = updated
+                                                            targetRecipientIdToSelect = "p_${existing.id}_main"
+                                                        } else {
+                                                            val updatedExtras = extras.map {
+                                                                if (it.id == cleanCoId || it.id == editingRecebedorId ||
+                                                                    (it.nome.isNotBlank() && it.nome.equals(initialRecipientName.trim(), ignoreCase = true))) {
+                                                                    it.copy(
+                                                                        nome = formattedRecipientName,
+                                                                        documento = recipientDocument.trim(),
+                                                                        assinatura = sigJson
+                                                                    )
+                                                                } else it
+                                                            }
+                                                            val updated = existing.copy(
+                                                                coRecebedoresJson = Recebedor.listToJson(updatedExtras),
+                                                                dataAtualizacao = System.currentTimeMillis()
+                                                            )
+                                                            DeliveryApp.instance.personRepository.updatePerson(updated)
+                                                            savedPerson = updated
+                                                            targetRecipientIdToSelect = editingRecebedorId
+                                                        }
+                                                    } else {
+                                                        // Apenas este morador existe neste endereço, atualiza normalmente
+                                                        val updated = existing.copy(
                                                             nome = formattedRecipientName,
                                                             documento = recipientDocument.trim(),
-                                                            assinatura = sigJson
+                                                            endereco = finalStreet,
+                                                            numero = finalNum,
+                                                            complemento = finalComp,
+                                                            bairro = finalBairro,
+                                                            assinatura = sigJson,
+                                                            dataAtualizacao = System.currentTimeMillis()
                                                         )
-                                                        DeliveryApp.instance.personRepository.moveOrCopyReceiver(
-                                                            sourcePerson = existing,
-                                                            receiver = targetRec,
-                                                            isMove = true,
-                                                            targetAddress = finalStreet,
-                                                            targetNumber = finalNum,
-                                                            targetComplement = finalComp,
-                                                            targetBairro = finalBairro
-                                                        )
-                                                    } else {
-                                                        val updated = if (editingRecebedorId == null || editingRecebedorId == "main" || editingRecebedorId?.startsWith("p_${existing.id}_main") == true) {
-                                                            existing.copy(
-                                                                nome = formattedRecipientName,
-                                                                documento = recipientDocument.trim(),
-                                                                endereco = finalStreet,
-                                                                numero = finalNum,
-                                                                complemento = finalComp,
-                                                                bairro = finalBairro,
-                                                                assinatura = sigJson,
-                                                                dataAtualizacao = System.currentTimeMillis()
-                                                            )
-                                                        } else {
-                                                            val extras = Recebedor.listFromJson(existing.coRecebedoresJson)
-                                                            val cleanId = editingRecebedorId!!.removePrefix("p_${existing.id}_co_")
-                                                            val otherExtras = extras.filterNot { it.id == cleanId || it.id == editingRecebedorId }
-                                                            val oldPrimary = Recebedor(
-                                                                id = java.util.UUID.randomUUID().toString().take(8),
-                                                                nome = existing.nome,
-                                                                documento = existing.documento,
-                                                                assinatura = existing.assinatura,
-                                                                dataUso = existing.dataAtualizacao
-                                                            )
-                                                            val newExtras = mutableListOf<Recebedor>()
-                                                            if (oldPrimary.nome.isNotBlank()) {
-                                                                newExtras.add(oldPrimary)
-                                                            }
-                                                            newExtras.addAll(otherExtras)
-
-                                                            existing.copy(
-                                                                nome = formattedRecipientName,
-                                                                documento = recipientDocument.trim(),
-                                                                endereco = finalStreet,
-                                                                numero = finalNum,
-                                                                complemento = finalComp,
-                                                                bairro = finalBairro,
-                                                                assinatura = sigJson,
-                                                                coRecebedoresJson = Recebedor.listToJson(newExtras),
-                                                                dataAtualizacao = System.currentTimeMillis()
-                                                            )
-                                                        }
                                                         DeliveryApp.instance.personRepository.updatePerson(updated)
+                                                        savedPerson = updated
+                                                        targetRecipientIdToSelect = editingRecebedorId ?: "p_${existing.id}_main"
                                                     }
                                                     withContext(Dispatchers.Main) {
-                                                        AccessibilityAutomationEngine.refreshCurrentAddress()
-                                                        Toast.makeText(
-                                                            this@FloatingBubbleService,
-                                                            "Dados atualizados com sucesso!",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
+                                                        AccessibilityAutomationEngine.notifyPersonSaved(savedPerson, targetRecipientIdToSelect)
+                                                        ToastHelper.show(this@FloatingBubbleService, "Dados atualizados com sucesso!")
                                                         RecipientDraftManager.clearDraft(this@FloatingBubbleService)
                                                         draftAvailable = null
+                                                        officialApiName = null
+                                                        apiNameCorrectionSuggestion = null
+                                                        cpfLookupMessage = null
+                                                        lastAutoLookedUpCpf = ""
+                                                        savedRecipientFoundByName = null
                                                         isSavingRecipient = false
                                                         isEditModalOpen = false
                                                         updateWindowLayoutMode(OverlayMode.PANEL)
@@ -3322,7 +4076,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 com.example.util.CrashReporter.recordException(e, "UpdateResident")
                                                 withContext(Dispatchers.Main) {
                                                     isSavingRecipient = false
-                                                    Toast.makeText(this@FloatingBubbleService, "Erro ao atualizar: ${e.message ?: "Tente novamente"}", Toast.LENGTH_LONG).show()
+                                                    ToastHelper.showLong(this@FloatingBubbleService, "Erro ao atualizar: ${e.message ?: "Tente novamente"}")
                                                 }
                                             }
                                         }
@@ -3330,9 +4084,10 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         // Inserir novo cadastro
                                         serviceScope.launch(Dispatchers.IO) {
                                             try {
-                                                val searchKey = if (finalNum.isNotBlank()) "$finalStreet, $finalNum" else finalStreet
+                                                val searchKey = "$finalStreet, $finalNum"
                                                 val existingList = DeliveryApp.instance.personRepository.findPersonsByAddress(searchKey)
                                                 val matchingHouse = existingList.firstOrNull {
+                                                    AddressNormalizer.areStreetNamesMatching(it.endereco, finalStreet) &&
                                                     AddressNormalizer.areNumbersMatching(it.numero, finalNum) &&
                                                     (finalComp.isBlank() || it.complemento.isBlank() || it.complemento.equals(finalComp, ignoreCase = true))
                                                 }
@@ -3364,19 +4119,15 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     )
                                                     DeliveryApp.instance.personRepository.updatePerson(updated)
                                                     withContext(Dispatchers.Main) {
-                                                        AccessibilityAutomationEngine.setMatchedPersonDirect(updated)
-                                                        val allRecs = AccessibilityAutomationEngine.extractAllRecebedores(listOf(updated))
-                                                        val newMainRec = allRecs.firstOrNull { it.id == "p_${updated.id}_main" } ?: allRecs.firstOrNull()
-                                                        if (newMainRec != null) {
-                                                            AccessibilityAutomationEngine.selectRecebedor(newMainRec)
-                                                        }
-                                                        Toast.makeText(
-                                                            this@FloatingBubbleService,
-                                                            "Destinatário adicionado e selecionado!",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
+                                                        AccessibilityAutomationEngine.notifyPersonSaved(updated, "p_${updated.id}_main")
+                                                        ToastHelper.show(this@FloatingBubbleService, "Destinatário adicionado e selecionado!")
                                                         RecipientDraftManager.clearDraft(this@FloatingBubbleService)
                                                         draftAvailable = null
+                                                        officialApiName = null
+                                                        apiNameCorrectionSuggestion = null
+                                                        cpfLookupMessage = null
+                                                        lastAutoLookedUpCpf = ""
+                                                        savedRecipientFoundByName = null
                                                         isSavingRecipient = false
                                                         isEditModalOpen = false
                                                         updateWindowLayoutMode(OverlayMode.PANEL)
@@ -3394,18 +4145,15 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     val newId = DeliveryApp.instance.personRepository.insertPerson(newPerson)
                                                     val saved = newPerson.copy(id = newId)
                                                     withContext(Dispatchers.Main) {
-                                                        AccessibilityAutomationEngine.setMatchedPersonDirect(saved)
-                                                        val allRecs = AccessibilityAutomationEngine.extractAllRecebedores(listOf(saved))
-                                                        if (allRecs.isNotEmpty()) {
-                                                            AccessibilityAutomationEngine.selectRecebedor(allRecs.first())
-                                                        }
-                                                        Toast.makeText(
-                                                            this@FloatingBubbleService,
-                                                            "Destinatário cadastrado com sucesso!",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
+                                                        AccessibilityAutomationEngine.notifyPersonSaved(saved, "p_${newId}_main")
+                                                        ToastHelper.show(this@FloatingBubbleService, "Destinatário cadastrado com sucesso!")
                                                         RecipientDraftManager.clearDraft(this@FloatingBubbleService)
                                                         draftAvailable = null
+                                                        officialApiName = null
+                                                        apiNameCorrectionSuggestion = null
+                                                        cpfLookupMessage = null
+                                                        lastAutoLookedUpCpf = ""
+                                                        savedRecipientFoundByName = null
                                                         isSavingRecipient = false
                                                         isEditModalOpen = false
                                                         updateWindowLayoutMode(OverlayMode.PANEL)
@@ -3415,7 +4163,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 com.example.util.CrashReporter.recordException(e, "InsertNewRecipient")
                                                 withContext(Dispatchers.Main) {
                                                     isSavingRecipient = false
-                                                    Toast.makeText(this@FloatingBubbleService, "Erro ao cadastrar: ${e.message ?: "Tente novamente"}", Toast.LENGTH_LONG).show()
+                                                    ToastHelper.showLong(this@FloatingBubbleService, "Erro ao cadastrar: ${e.message ?: "Tente novamente"}")
                                                 }
                                             }
                                         }
@@ -3519,6 +4267,11 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     Button(
                                         onClick = {
                                             RecipientDraftManager.clearDraft(this@FloatingBubbleService)
+                                            officialApiName = null
+                                            apiNameCorrectionSuggestion = null
+                                            cpfLookupMessage = null
+                                            lastAutoLookedUpCpf = ""
+                                            savedRecipientFoundByName = null
                                             showDiscardEditConfirmDialog = false
                                             isEditModalOpen = false
                                             updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
@@ -3720,11 +4473,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                             AccessibilityAutomationEngine.prioritizeRecebedor(r)
                                             isMultipleRecipientsModalOpen = false
                                             updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
-                                            Toast.makeText(
-                                                this@FloatingBubbleService,
-                                                "Selecionado: ${r.nome}${if (rComp.isNotBlank()) " ($rComp)" else ""}",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                            ToastHelper.show(this@FloatingBubbleService, "Selecionado: ${r.nome}${if (rComp.isNotBlank()) " ($rComp)" else ""}")
                                         }
                                 ) {
                                     Row(
@@ -3770,11 +4519,30 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 )
                                             }
                                             Spacer(modifier = Modifier.height(2.dp))
-                                            Text(
-                                                text = if (r.documento.isNotBlank()) "Doc: ${r.documento}" else "Sem documento",
-                                                fontSize = 10.5.sp,
-                                                color = Color(0xFF757575)
-                                            )
+                                            val rDocDigits = r.documento.filter { it.isDigit() }
+                                            val rIsCpf = rDocDigits.length == 11
+                                            val rIsVerified = rIsCpf && verifiedCpfsMap.containsKey(rDocDigits)
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                Text(
+                                                    text = if (r.documento.isNotBlank()) (if (rIsCpf) "CPF: ${r.documento}" else "Doc: ${r.documento}") else "Sem documento",
+                                                    fontSize = 10.5.sp,
+                                                    color = Color(0xFF757575)
+                                                )
+                                                if (rIsVerified) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        color = Color(0xFFE8F5E9)
+                                                    ) {
+                                                        Text(
+                                                            text = "✓ Verificado na API",
+                                                            fontSize = 8.5.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = Color(0xFF2E7D32),
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -4082,7 +4850,10 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     )
                                 }
                                 IconButton(
-                                    onClick = { isExpanded = false },
+                                    onClick = {
+                                        isExpanded = false
+                                        updateWindowLayoutMode(OverlayMode.BUBBLE)
+                                    },
                                     modifier = Modifier.size(28.dp)
                                 ) {
                                     Icon(
@@ -4379,7 +5150,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         modifier = Modifier
                                             .clickable {
                                                 AccessibilityAutomationEngine.clearDetectedAddress()
-                                                Toast.makeText(this@FloatingBubbleService, "Pesquisa pausada. Clique nas setas 🔄 para buscar novamente.", Toast.LENGTH_SHORT).show()
+                                                ToastHelper.show(this@FloatingBubbleService, "Pesquisa pausada. Clique nas setas 🔄 para buscar novamente.")
                                             }
                                     ) {
                                         Row(
@@ -4723,11 +5494,85 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         }
                                     }
                                     if (activeRec.documento.isNotBlank()) {
-                                        Text(
-                                            text = "Doc: ${activeRec.documento}",
-                                            fontSize = 11.sp,
-                                            color = Color(0xFF455A64)
-                                        )
+                                        val activeDocDigits = activeRec.documento.filter { it.isDigit() }
+                                        val isCpfDoc = activeDocDigits.length == 11
+                                        val isCpfVerified = isCpfDoc && verifiedCpfsMap.containsKey(activeDocDigits)
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = if (isCpfDoc) "CPF: ${activeRec.documento}" else "Doc: ${activeRec.documento}",
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF37474F),
+                                                fontWeight = FontWeight.Medium
+                                            )
+
+                                            if (isCpfDoc) {
+                                                if (isCpfVerified) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        color = Color(0xFFE8F5E9),
+                                                        border = BorderStroke(0.8.dp, Color(0xFF81C784)),
+                                                        modifier = Modifier.clickable {
+                                                            val vName = com.example.data.remote.CpfVerificationTracker.getVerifiedName(activeRec.documento)
+                                                            val info = if (!vName.isNullOrBlank()) "✓ CPF verificado na API!\nNome oficial: $vName" else "✓ CPF verificado com sucesso na API oficial!"
+                                                            ToastHelper.show(serviceContext, info)
+                                                        }
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.CheckCircle,
+                                                                contentDescription = "CPF verificado na API",
+                                                                tint = Color(0xFF2E7D32),
+                                                                modifier = Modifier.size(11.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(3.dp))
+                                                            Text(
+                                                                text = "✓ Verificado na API",
+                                                                fontSize = 9.5.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = Color(0xFF1B5E20)
+                                                            )
+                                                        }
+                                                    }
+                                                } else {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        color = Color(0xFFFFF3E0),
+                                                        border = BorderStroke(0.8.dp, Color(0xFFFFB74D)),
+                                                        modifier = Modifier.clickable {
+                                                            ToastHelper.show(serviceContext, "Consultando CPF na API...")
+                                                            performCpfLookup(activeDocDigits)
+                                                        }
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Search,
+                                                                contentDescription = "Checar na API",
+                                                                tint = Color(0xFFE65100),
+                                                                modifier = Modifier.size(11.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(3.dp))
+                                                            Text(
+                                                                text = "Checar na API",
+                                                                fontSize = 9.5.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = Color(0xFFE65100)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     } else {
                                         Text(
                                             text = "⚠️ Sem Documento",
@@ -4791,6 +5636,9 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     } else {
                                         r.nome.ifBlank { "Sem nome" }
                                     }
+                                    val rDocDigits = r.documento.filter { it.isDigit() }
+                                    val rIsVerified = rDocDigits.length == 11 && verifiedCpfsMap.containsKey(rDocDigits)
+
                                     Surface(
                                         shape = RoundedCornerShape(16.dp),
                                         color = if (isSelected) Color(0xFF2E7D32) else Color(0xFFECEFF1),
@@ -4814,6 +5662,15 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 color = if (isSelected) Color.White else Color(0xFF263238),
                                                 maxLines = 1
                                             )
+                                            if (rIsVerified) {
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Icon(
+                                                    imageVector = Icons.Default.CheckCircle,
+                                                    contentDescription = "CPF Verificado na API",
+                                                    tint = if (isSelected) Color.White else Color(0xFF2E7D32),
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -4961,7 +5818,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         person.nome,
                                         person.documento
                                     )
-                                    Toast.makeText(this@FloatingBubbleService, res.message, Toast.LENGTH_SHORT).show()
+                                    ToastHelper.show(this@FloatingBubbleService, res.message)
                                     if (res.nameFilled || res.documentFilled) {
                                         triggerSuccessFeedback()
                                     }
@@ -4982,35 +5839,6 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             }
 
                             Spacer(modifier = Modifier.height(6.dp))
-
-                            // Botão 2: Desenhar Assinatura na Tela (Dedicado)
-                            if (hasSignature) {
-                                Button(
-                                    onClick = {
-                                        AccessibilityAutomationEngine.prioritizeRecebedor(person)
-                                        if (appSettings.vibrationEnabled) {
-                                            triggerHapticFeedback()
-                                        }
-                                        isExpanded = false
-                                        executeSignatureDrawing(person.assinatura)
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(38.dp),
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                                ) {
-                                    Icon(Icons.Default.Draw, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "✍️ DESENHAR ASSINATURA NA TELA",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(6.dp))
-                            }
 
                             // Linha de Atalhos: Copiar Nome, Copiar Doc e Preencher+Assinar
                             Row(
@@ -5063,11 +5891,12 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 triggerHapticFeedback()
                                             }
                                             isExpanded = false
+                                            updateWindowLayoutMode(OverlayMode.BUBBLE)
                                             val res = AccessibilityAutomationEngine.fillFields(
                                                 person.nome,
                                                 person.documento
                                             )
-                                            Toast.makeText(this@FloatingBubbleService, res.message, Toast.LENGTH_SHORT).show()
+                                            ToastHelper.show(this@FloatingBubbleService, res.message)
                                             executeSignatureDrawing(person.assinatura)
                                         },
                                         modifier = Modifier.weight(1.3f).height(32.dp),
@@ -5127,13 +5956,14 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 OutlinedButton(
                                     onClick = {
                                         isExpanded = false
+                                        updateWindowLayoutMode(OverlayMode.BUBBLE)
                                         val app = application as? DeliveryApp
                                         val selector = AreaSelectorOverlay(
                                             context = this@FloatingBubbleService,
                                             onAreaSelected = { left, top, right, bottom ->
                                                 serviceScope.launch {
                                                     app?.settingsRepository?.setCustomScanArea(left, top, right, bottom)
-                                                    Toast.makeText(this@FloatingBubbleService, "Área alvo calibrada!", Toast.LENGTH_SHORT).show()
+                                                    ToastHelper.show(this@FloatingBubbleService, "Área alvo calibrada!")
                                                 }
                                             },
                                             onDismiss = {}
@@ -5196,7 +6026,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                 val onConfirmMoveOrCopy: () -> Unit = onConfirm@{
                     if (moveOrCopyTargetStreet.trim().isBlank()) {
                         moveOrCopyStreetError = true
-                        Toast.makeText(serviceContext, "Informe o endereço de destino!", Toast.LENGTH_SHORT).show()
+                        ToastHelper.show(serviceContext, "Informe o endereço de destino!")
                         return@onConfirm
                     }
                     val rec = moveOrCopyTargetReceiver ?: return@onConfirm
@@ -5220,7 +6050,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 val actionName = if (isMoveAction) "movido" else "copiado"
                                 if (success) {
                                     FeedbackHelper.triggerSuccess(serviceContext)
-                                    Toast.makeText(serviceContext, "Morador $actionName com sucesso!", Toast.LENGTH_SHORT).show()
+                                    ToastHelper.show(serviceContext, "Morador $actionName com sucesso!")
 
                                     if (isMoveAction) {
                                         isEditModalOpen = false
@@ -5229,13 +6059,13 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     AccessibilityAutomationEngine.rescanCurrentScreen(forceUnlock = true)
                                     updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
                                 } else {
-                                    Toast.makeText(serviceContext, "Erro ao realizar operação.", Toast.LENGTH_SHORT).show()
+                                    ToastHelper.show(serviceContext, "Erro ao realizar operação.")
                                 }
                             }
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
                                 isExecutingMoveOrCopy = false
-                                Toast.makeText(serviceContext, "Erro: ${e.message}", Toast.LENGTH_SHORT).show()
+                                ToastHelper.show(serviceContext, "Erro: ${e.message}")
                             }
                         }
                     }
@@ -5467,7 +6297,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     moveOrCopyTargetBairro = p.bairro
                                                     moveOrCopySearchQuery = ""
                                                     moveOrCopyStreetError = false
-                                                    Toast.makeText(serviceContext, "Endereço selecionado!", Toast.LENGTH_SHORT).show()
+                                                    ToastHelper.show(serviceContext, "Endereço selecionado!")
                                                 }
                                         ) {
                                             Row(
@@ -5524,7 +6354,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 isListeningMoveStreet = true
                                                 com.example.util.SpeechHelper.startListening(
                                                     context = serviceContext,
-                                                    onReady = { Toast.makeText(serviceContext, "Fale o endereço...", Toast.LENGTH_SHORT).show() },
+                                                    onReady = { ToastHelper.show(serviceContext, "Fale o endereço...") },
                                                     onResult = { result ->
                                                         isListeningMoveStreet = false
                                                         val parsed = AddressNormalizer.parseAddressComponents(result)
@@ -5536,7 +6366,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     },
                                                     onError = { err ->
                                                         isListeningMoveStreet = false
-                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(serviceContext, err)
                                                     }
                                                 )
                                             }
@@ -5568,7 +6398,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                         isListeningMoveNumber = true
                                                         com.example.util.SpeechHelper.startListening(
                                                             context = serviceContext,
-                                                            onReady = { Toast.makeText(serviceContext, "Fale o número...", Toast.LENGTH_SHORT).show() },
+                                                            onReady = { ToastHelper.show(serviceContext, "Fale o número...") },
                                                             onResult = { result ->
                                                                 isListeningMoveNumber = false
                                                                 val num = com.example.util.SpeechHelper.processSpokenNumber(result)
@@ -5576,7 +6406,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                             },
                                                             onError = { err ->
                                                                 isListeningMoveNumber = false
-                                                                Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                                ToastHelper.show(serviceContext, err)
                                                             }
                                                         )
                                                     }
@@ -5604,7 +6434,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                         isListeningMoveComp = true
                                                         com.example.util.SpeechHelper.startListening(
                                                             context = serviceContext,
-                                                            onReady = { Toast.makeText(serviceContext, "Fale o complemento...", Toast.LENGTH_SHORT).show() },
+                                                            onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
                                                             onResult = { result ->
                                                                 isListeningMoveComp = false
                                                                 val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
@@ -5612,7 +6442,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                             },
                                                             onError = { err ->
                                                                 isListeningMoveComp = false
-                                                                Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                                ToastHelper.show(serviceContext, err)
                                                             }
                                                         )
                                                     }
@@ -5641,7 +6471,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 isListeningMoveBairro = true
                                                 com.example.util.SpeechHelper.startListening(
                                                     context = serviceContext,
-                                                    onReady = { Toast.makeText(serviceContext, "Fale o bairro...", Toast.LENGTH_SHORT).show() },
+                                                    onReady = { ToastHelper.show(serviceContext, "Fale o bairro...") },
                                                     onResult = { result ->
                                                         isListeningMoveBairro = false
                                                         val br = com.example.util.SpeechHelper.processSpokenNeighborhood(result)
@@ -5649,7 +6479,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     },
                                                     onError = { err ->
                                                         isListeningMoveBairro = false
-                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(serviceContext, err)
                                                     }
                                                 )
                                             }
@@ -5810,7 +6640,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 isListeningNewComp = true
                                                 com.example.util.SpeechHelper.startListening(
                                                     context = serviceContext,
-                                                    onReady = { Toast.makeText(serviceContext, "Fale o complemento...", Toast.LENGTH_SHORT).show() },
+                                                    onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
                                                     onResult = { result ->
                                                         isListeningNewComp = false
                                                         val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
@@ -5818,7 +6648,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     },
                                                     onError = { err ->
                                                         isListeningNewComp = false
-                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(serviceContext, err)
                                                     }
                                                 )
                                             }
@@ -5888,13 +6718,13 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     onClick = {
                                         val trimmedComp = newComplementInput.trim()
                                         if (trimmedComp.isBlank()) {
-                                            Toast.makeText(serviceContext, "Digite ou fale o complemento.", Toast.LENGTH_SHORT).show()
+                                            ToastHelper.show(serviceContext, "Digite ou fale o complemento.")
                                             return@Button
                                         }
                                         val formatted = AddressNormalizer.formatComplementToken(trimmedComp).ifBlank { trimmedComp }
                                         AccessibilityAutomationEngine.setComplementForDetectedAddress(formatted)
                                         closeAddComplementDialog()
-                                        Toast.makeText(serviceContext, "Complemento \"$formatted\" adicionado!", Toast.LENGTH_SHORT).show()
+                                        ToastHelper.show(serviceContext, "Complemento \"$formatted\" adicionado!")
                                     },
                                     modifier = Modifier
                                         .weight(1.3f)
@@ -6028,13 +6858,13 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     showDeleteReceiverConfirmDialog = false
                                                     receiverToDelete = null
                                                     if (ok) {
-                                                        Toast.makeText(this@FloatingBubbleService, "Recebedor \"${delRec.nome}\" apagado com sucesso!", Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(this@FloatingBubbleService, "Recebedor \"${delRec.nome}\" apagado com sucesso!")
                                                     } else {
-                                                        Toast.makeText(this@FloatingBubbleService, "Recebedor removido.", Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(this@FloatingBubbleService, "Recebedor removido.")
                                                     }
                                                     AccessibilityAutomationEngine.refreshCurrentAddress()
-                                                    if (!isExpanded && !isMultipleRecipientsModalOpen && !isEditModalOpen) {
-                                                        updateWindowLayoutMode(OverlayMode.PANEL)
+                                                    if (!isMultipleRecipientsModalOpen && !isEditModalOpen) {
+                                                        updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
                                                     }
                                                 }
                                             } catch (e: Throwable) {
@@ -6042,7 +6872,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     isDeletingReceiver = false
                                                     showDeleteReceiverConfirmDialog = false
                                                     receiverToDelete = null
-                                                    Toast.makeText(this@FloatingBubbleService, "Erro ao apagar: ${e.message ?: "Tente novamente"}", Toast.LENGTH_SHORT).show()
+                                                    ToastHelper.show(this@FloatingBubbleService, "Erro ao apagar: ${e.message ?: "Tente novamente"}")
                                                 }
                                             }
                                         }
@@ -6182,7 +7012,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                 isListeningChangeComp = true
                                                 com.example.util.SpeechHelper.startListening(
                                                     context = serviceContext,
-                                                    onReady = { Toast.makeText(serviceContext, "Fale o complemento...", Toast.LENGTH_SHORT).show() },
+                                                    onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
                                                     onResult = { result ->
                                                         isListeningChangeComp = false
                                                         val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
@@ -6190,7 +7020,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     },
                                                     onError = { err ->
                                                         isListeningChangeComp = false
-                                                        Toast.makeText(serviceContext, err, Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(serviceContext, err)
                                                     }
                                                 )
                                             }
@@ -6306,7 +7136,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     onClick = {
                                         val trimmedInput = targetNewComplementInput.trim()
                                         if (trimmedInput.isBlank()) {
-                                            Toast.makeText(serviceContext, "Digite ou selecione o complemento.", Toast.LENGTH_SHORT).show()
+                                            ToastHelper.show(serviceContext, "Digite ou selecione o complemento.")
                                             return@Button
                                         }
                                         val formatted = AddressNormalizer.formatComplementToken(trimmedInput).ifBlank { trimmedInput }
@@ -6328,10 +7158,14 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     showChangeComplementDialog = false
                                                     receiverToChangeComplement = null
                                                     if (ok) {
-                                                        Toast.makeText(this@FloatingBubbleService, "Morador \"${recToChange.nome}\" movido para $formatted!", Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(this@FloatingBubbleService, "Morador \"${recToChange.nome}\" movido para $formatted!")
                                                         AccessibilityAutomationEngine.setComplementForDetectedAddress(formatted)
+                                                        serviceScope.launch(Dispatchers.Main) {
+                                                            delay(150)
+                                                            AccessibilityAutomationEngine.refreshCurrentAddress()
+                                                        }
                                                     } else {
-                                                        Toast.makeText(this@FloatingBubbleService, "Não foi possível mover o morador.", Toast.LENGTH_SHORT).show()
+                                                        ToastHelper.show(this@FloatingBubbleService, "Não foi possível mover o morador.")
                                                     }
                                                 }
                                             } catch (e: Throwable) {
@@ -6339,7 +7173,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     isExecutingChangeComplement = false
                                                     showChangeComplementDialog = false
                                                     receiverToChangeComplement = null
-                                                    Toast.makeText(this@FloatingBubbleService, "Erro: ${e.message ?: "Tente novamente"}", Toast.LENGTH_SHORT).show()
+                                                    ToastHelper.show(this@FloatingBubbleService, "Erro: ${e.message ?: "Tente novamente"}")
                                                 }
                                             }
                                         }
@@ -6363,6 +7197,8 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                 }
             }
         }
+
+
     }
 
     override fun onDestroy() {

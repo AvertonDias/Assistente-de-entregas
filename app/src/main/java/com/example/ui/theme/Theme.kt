@@ -16,9 +16,12 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import com.example.util.PortugueseTextToolbar
 
 private val DarkColorScheme = darkColorScheme(
     primary = BentoPrimaryDarkTheme,
@@ -100,9 +103,15 @@ fun DeliveryTheme(
         }
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
+    val portugueseToolbar = remember(view) { PortugueseTextToolbar(view) }
+
+    CompositionLocalProvider(
+        LocalTextToolbar provides portugueseToolbar
+    ) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            content = content
+        )
+    }
 }
