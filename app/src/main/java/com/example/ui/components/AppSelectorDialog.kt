@@ -103,24 +103,30 @@ fun AppSelectorDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text("Buscar app instalado...", fontSize = 12.sp) },
-                    trailingIcon = {
-                        VoiceInputIconButton(
-                            hintPrompt = "Fale o nome do app...",
-                            onResult = { spoken ->
-                                val clean = com.example.util.SpeechHelper.processSpokenSearch(spoken)
-                                if (clean.isNotBlank()) {
-                                    searchQuery = clean
-                                }
-                            }
-                        )
-                    },
-                    singleLine = true,
+                com.example.ui.components.PasteSupportBox(
+                    text = searchQuery,
+                    onPasteText = { searchQuery = it },
                     modifier = Modifier.fillMaxWidth()
-                )
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = { Text("Buscar app instalado...", fontSize = 12.sp) },
+                        trailingIcon = {
+                            VoiceInputIconButton(
+                                hintPrompt = "Fale o nome do app...",
+                                onResult = { spoken ->
+                                    val clean = com.example.util.SpeechHelper.processSpokenSearch(spoken)
+                                    if (clean.isNotBlank()) {
+                                        searchQuery = clean
+                                    }
+                                }
+                            )
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 

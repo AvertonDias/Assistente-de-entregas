@@ -16,7 +16,15 @@ data class FirebasePerson(
     val assinatura: String = "",
     val coRecebedoresJson: String = "",
     val dataCriacao: Long = System.currentTimeMillis(),
-    val dataAtualizacao: Long = System.currentTimeMillis()
+    val dataAtualizacao: Long = System.currentTimeMillis(),
+    val cpfVerificado: Boolean = false
+)
+
+data class FirebaseVerifiedCpf(
+    val cpfDigits: String = "",
+    val verifiedName: String = "",
+    val verifiedTimestamp: Long = System.currentTimeMillis(),
+    val verified: Boolean = true
 )
 
 data class FirebaseDelivery(

@@ -33,25 +33,23 @@ class MainActivity : ComponentActivity() {
         setContent {
             val settings by app.settingsRepository.getSettings().collectAsStateWithLifecycle(initialValue = AppSettings())
             DeliveryTheme(themeMode = settings.themeMode) {
-                com.example.ui.components.ProvideAppTextToolbar {
-                    Surface(modifier = Modifier.fillMaxSize()) {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
                         Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.TopCenter
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .widthIn(max = 840.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .widthIn(max = 840.dp)
-                            ) {
-                                val navController = rememberNavController()
-                                AppNavigation(
-                                    navController = navController,
-                                    app = app,
-                                    initialAction = action,
-                                    initialAddress = initialAddress
-                                )
-                            }
+                            val navController = rememberNavController()
+                            AppNavigation(
+                                navController = navController,
+                                app = app,
+                                initialAction = action,
+                                initialAddress = initialAddress
+                            )
                         }
                     }
                 }

@@ -3,6 +3,12 @@ package com.example.data.repository
 import com.example.data.local.entity.Person
 import kotlinx.coroutines.flow.Flow
 
+data class BubbleFuzzySearchResult(
+    val items: List<Person>,
+    val totalMatches: Int,
+    val isLimited: Boolean
+)
+
 interface PersonRepository {
     fun getAllPersons(): Flow<List<Person>>
     suspend fun getAllPersonsDirect(): List<Person>
@@ -10,6 +16,7 @@ interface PersonRepository {
     suspend fun getPersonByIdDirect(id: Long): Person?
     fun searchPersons(query: String): Flow<List<Person>>
     suspend fun findPersonsByAddress(rawAddress: String): List<Person>
+    suspend fun fuzzySearchForBubble(query: String, maxResults: Int = 45): BubbleFuzzySearchResult
     suspend fun insertPerson(person: Person): Long
     suspend fun insertAll(persons: List<Person>)
     suspend fun updatePerson(person: Person)

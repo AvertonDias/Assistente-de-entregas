@@ -338,63 +338,39 @@ fun HomeScreen(
 
             // Bento Grid 4: Módulos do Sistema
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    BentoModuleCard(
-                        modifier = Modifier.weight(1f),
-                        emoji = "👥",
-                        title = "Destinatários",
-                        subtitle = "Gerenciar pessoas",
-                        onClick = { onNavigate(Screen.PeopleList.route) }
-                    )
-                    BentoModuleCard(
-                        modifier = Modifier.weight(1f),
-                        emoji = "🧪",
-                        title = "Laboratório",
-                        subtitle = "Testar automação",
-                        onClick = { onNavigate(Screen.AutomationLab.route) }
-                    )
-                }
-            }
-
-            // Bento Grid: Relatório Diário de Atividades & Auditoria Contínua
-            item {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(24.dp))
-                        .clickable { onNavigate(Screen.DailyReport.route) }
-                        .testTag("bento_card_daily_report"),
+                        .clickable { onNavigate(Screen.PeopleList.route) }
+                        .testTag("bento_card_people"),
                     shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = BentoPrimaryContainer),
-                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(Color(0xFFBFDBFE)))
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.outlineVariant))
                 ) {
                     Row(
-                        modifier = Modifier.padding(18.dp),
+                        modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = "📊", fontSize = 28.sp)
+                        Text(text = "👥", fontSize = 26.sp)
                         Spacer(modifier = Modifier.width(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Relatório Diário & Auditoria",
+                                text = "Destinatários",
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = BentoOnPrimaryContainer
+                                color = MaterialTheme.colorScheme.onSurface
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Tempo total em uso no dia, registro contínuo e auditoria de ações do assistente",
+                                text = "Gerencie recebedores, endereços e assinaturas salvas",
                                 fontSize = 12.sp,
-                                color = BentoOnPrimaryContainer.copy(alpha = 0.85f)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Icon(
                             imageVector = Icons.Default.ChevronRight,
                             contentDescription = null,
-                            tint = BentoPrimaryDark,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -558,48 +534,5 @@ private fun BentoPillChip(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             maxLines = 1
         )
-    }
-}
-
-@Composable
-private fun BentoModuleCard(
-    modifier: Modifier = Modifier,
-    emoji: String,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = modifier
-            .height(110.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .clickable { onClick() }
-            .testTag("bento_card_${title.lowercase()}"),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.outlineVariant))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(text = emoji, fontSize = 24.sp)
-            Column {
-                Text(
-                    text = title,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = subtitle,
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-            }
-        }
     }
 }

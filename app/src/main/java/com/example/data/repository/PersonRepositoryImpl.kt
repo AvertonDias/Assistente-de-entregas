@@ -44,7 +44,10 @@ class PersonRepositoryImpl(
         val numValue: Int,
         val numRaw: String,
         val unitKey: String,
-        val nameLower: String
+        val nameLower: String,
+        val nameWords: List<String>,
+        val compWords: List<String>,
+        val bairroWords: List<String>
     )
 
     private fun indexPerson(p: Person): IndexedPerson {
@@ -56,10 +59,10 @@ class PersonRepositoryImpl(
 
         val pNormStreet = AddressNormalizer.normalize(p.endereco)
         val pStrippedStreet = AddressNormalizer.normalize(AddressNormalizer.stripStreetType(p.endereco))
-        val pNormNumber = AddressNormalizer.normalize(p.numero)
-        val pCleanNumber = AddressNormalizer.normalizeNumber(p.numero)
-        val pDigitsNumber = p.numero.filter { it.isDigit() }
-        val pRawNumber = p.numero.trim().replace(".", "")
+        val pNormNumber = AddressNormalizer.normalize(effectiveNumber)
+        val pCleanNumber = AddressNormalizer.normalizeNumber(effectiveNumber)
+        val pDigitsNumber = effectiveNumber.filter { it.isDigit() }
+        val pRawNumber = effectiveNumber.trim().replace(".", "")
         val pNormComplement = AddressNormalizer.normalize(p.complemento)
         val pNormBairro = AddressNormalizer.normalize(p.bairro)
         val pNormCidade = AddressNormalizer.normalize(p.cidade)
@@ -94,8 +97,19 @@ class PersonRepositoryImpl(
             }
         }
 
-        val fullWords = fullSearchable.split(" ").filter { it.isNotBlank() }
-        val sigWords = AddressNormalizer.extractStreetSignificantWords(fullSearchable)
+        val fullWords = fullSearchable.split(" ").filter { it.isNotBlank() }.distinct()
+        val sigWords = AddressNormalizer.extractStreetSignificantWords(effectiveStreet)
+        val nameWords = buildList {
+            pNormName.split(" ").filterTo(this) { it.isNotBlank() }
+            for (co in pCoRecNames) {
+                co.split(" ").filterTo(this) { it.isNotBlank() }
+            }
+        }.distinct()
+        val compWords = pNormComplement.split(" ").filter { it.isNotBlank() }.distinct()
+        val bairroWords = buildList {
+            pNormBairro.split(" ").filterTo(this) { it.isNotBlank() }
+            pNormCidade.split(" ").filterTo(this) { it.isNotBlank() }
+        }.distinct()
 
         return IndexedPerson(
             person = p,
@@ -120,7 +134,10 @@ class PersonRepositoryImpl(
             numValue = if (numDigits.isNotBlank()) numDigits.toIntOrNull() ?: Int.MAX_VALUE else Int.MAX_VALUE,
             numRaw = effectiveNumber.trim().lowercase(),
             unitKey = AddressNormalizer.getUnitSortKey(effectiveComplement),
-            nameLower = p.nome.lowercase()
+            nameLower = p.nome.lowercase(),
+            nameWords = nameWords,
+            compWords = compWords,
+            bairroWords = bairroWords
         )
     }
 
@@ -149,6 +166,11 @@ class PersonRepositoryImpl(
 
             for (w in item.sigWords) {
                 if (w.length >= 2) {
+                    wordMap.getOrPut(w) { ArrayList() }.add(item)
+                }
+            }
+            for (w in item.fullWords) {
+                if (w.length >= 2 && w !in item.sigWords) {
                     wordMap.getOrPut(w) { ArrayList() }.add(item)
                 }
             }
@@ -253,12 +275,17 @@ class PersonRepositoryImpl(
             if (trimmed.isBlank()) {
                 listToUse.map { it.person }
             } else {
-                filterIndexedPersonsByQuery(listToUse, trimmed)
+                val useIdx = indexedList.isNotEmpty() && wordIndexMap.isNotEmpty()
+                filterIndexedPersonsByQuery(listToUse, trimmed, useIndices = useIdx)
             }
         }.flowOn(Dispatchers.Default)
     }
 
-    private fun filterIndexedPersonsByQuery(list: List<IndexedPerson>, query: String): List<Person> {
+    private fun filterIndexedPersonsByQuery(
+        list: List<IndexedPerson>,
+        query: String,
+        useIndices: Boolean = false
+    ): List<Person> {
         val trimmed = query.trim()
         if (trimmed.isBlank()) {
             return list.map { it.person }
@@ -305,11 +332,75 @@ class PersonRepositoryImpl(
             queryTokens
         }
 
+        val candidatesToScore: List<IndexedPerson> = if (useIndices) {
+            val candidateSet = LinkedHashSet<IndexedPerson>()
+            val wordMapSnapshot = wordIndexMap
+            val numMapSnapshot = numberIndexMap
+
+            if (queryHasStreetAndNumber) {
+                for (qNum in cleanQueryNumbers) {
+                    numMapSnapshot[qNum]?.let { candidateSet.addAll(it) }
+                }
+                val streetWords = AddressNormalizer.extractStreetSignificantWords(parsedQueryAddr.street)
+                for (w in streetWords) {
+                    if (w.length >= 2) {
+                        wordMapSnapshot[w]?.let { candidateSet.addAll(it) }
+                    }
+                }
+                if (candidateSet.isEmpty()) {
+                    for ((key, bucket) in wordMapSnapshot) {
+                        if (streetWords.any { w -> w.length >= 2 && (key.startsWith(w) || (w.length >= 3 && AddressNormalizer.isSimilarWord(w, key))) }) {
+                            candidateSet.addAll(bucket)
+                        }
+                    }
+                }
+                candidateSet.toList()
+            } else if (isNumberOnlySearch && primaryQueryNumber.isNotBlank()) {
+                numMapSnapshot[primaryQueryNumber]?.let { candidateSet.addAll(it) }
+                for ((k, bucket) in numMapSnapshot) {
+                    if (k.contains(primaryQueryNumber)) {
+                        candidateSet.addAll(bucket)
+                    }
+                }
+                for ((k, bucket) in wordMapSnapshot) {
+                    if (k.contains(primaryQueryNumber)) {
+                        candidateSet.addAll(bucket)
+                    }
+                }
+                candidateSet.toList()
+            } else if (coreTokens.all { it.length >= 2 }) {
+                for (token in coreTokens) {
+                    wordMapSnapshot[token]?.let { candidateSet.addAll(it) }
+                    for ((key, bucket) in wordMapSnapshot) {
+                        if (key.contains(token) || (token.length >= 3 && AddressNormalizer.isSimilarWord(token, key))) {
+                            candidateSet.addAll(bucket)
+                        }
+                    }
+                    if (token.any { it.isDigit() }) {
+                        for ((k, bucket) in numMapSnapshot) {
+                            if (k.contains(token)) {
+                                candidateSet.addAll(bucket)
+                            }
+                        }
+                    }
+                }
+                if (candidateSet.isEmpty() && coreTokens.size == 1 && coreTokens[0].length >= 6) {
+                    list
+                } else {
+                    candidateSet.toList()
+                }
+            } else {
+                list
+            }
+        } else {
+            list
+        }
+
         data class ScoredIndexedPerson(val item: IndexedPerson, val score: Int)
 
-        val scoredList = ArrayList<ScoredIndexedPerson>(list.size)
+        val scoredList = ArrayList<ScoredIndexedPerson>(candidatesToScore.size.coerceAtMost(256))
 
-        for (item in list) {
+        for (item in candidatesToScore) {
             fun matchesToken(token: String): Boolean {
                 if (item.fullSearchable.contains(token)) return true
                 if (token.all { it.isDigit() }) {
@@ -319,7 +410,7 @@ class PersonRepositoryImpl(
                     }
                 }
                 if (item.fullWords.any { it.startsWith(token) }) return true
-                if (token.length >= 3 && item.sigWords.any { AddressNormalizer.isSimilarWord(token, it) }) {
+                if (token.length >= 3 && item.fullWords.any { it.length >= 2 && AddressNormalizer.isSimilarWord(token, it) }) {
                     return true
                 }
                 return false
@@ -328,23 +419,29 @@ class PersonRepositoryImpl(
             var score = 0
 
             if (queryHasStreetAndNumber) {
-                // Busca de endereço (Rua + Número): OBRIGATORIAMENTE rua E número devem pertencer à mesma residência!
-                val streetMatches = AddressNormalizer.areStreetNamesMatching(parsedQueryAddr.street, item.person.endereco)
+                // Busca de endereço (Rua + Número): aceita correspondência inteligente de rua (ex: "Vital" ou ordem trocada) + número correspondente
+                val streetScore = AddressNormalizer.scoreStreetNamesMatch(parsedQueryAddr.street, item.person.endereco)
                 val numberMatches = cleanQueryNumbers.any { qNum ->
                     item.pCleanNumber == qNum || item.pDigitsNumber == qNum || item.pRawNumber.equals(qNum, ignoreCase = true) ||
                     AddressNormalizer.areNumbersMatching(qNum, item.person.numero)
                 }
 
-                if (streetMatches && numberMatches) {
-                    score = 1500
+                if (streetScore > 0 && numberMatches) {
+                    score = 1500 + (streetScore * 5)
                     if (parsedQueryAddr.complement.isNotBlank() && item.pNormComplement.contains(AddressNormalizer.normalize(parsedQueryAddr.complement))) {
                         score += 200
                     }
-                } else if (streetMatches && cleanQueryNumbers.isEmpty()) {
-                    score = 400
+                } else if (streetScore > 0 && cleanQueryNumbers.isEmpty()) {
+                    score = 400 + (streetScore * 4)
                 } else {
-                    // Rua diferente! Rejeita imediatamente (score = 0) para NUNCA puxar pessoas de outra rua com mesmo número!
-                    score = 0
+                    // Verifica se o número digitado faz parte do próprio nome da rua (ex: "Novembro 15" -> "Rua 15 de Novembro")
+                    val fullStreetScore = AddressNormalizer.scoreStreetNamesMatch(normQuery, item.person.endereco)
+                    if (fullStreetScore > 0 && !trimmed.contains(",") && cleanQueryNumbers.all { qNum -> item.pNormStreet.contains(qNum) }) {
+                        score = 600 + (fullStreetScore * 3)
+                    } else {
+                        // Rua diferente! Rejeita imediatamente (score = 0) para NUNCA puxar pessoas de outra rua com mesmo número!
+                        score = 0
+                    }
                 }
             } else if (isNumberOnlySearch && primaryQueryNumber.isNotBlank()) {
                 // Caso A: Busca puramente pelo número (ex: "123", "1.843", "nº 123", "num 1843")
@@ -369,8 +466,9 @@ class PersonRepositoryImpl(
                     }
                 }
             } else {
-                // Caso B: Busca com palavras (ex: "Flores", "Carlos", "São Paulo")
+                // Caso B: Busca com palavras (ex: "Vital", "Antônio Francisco da Luz", "Carlos")
                 val allCoreTokensMatch = coreTokens.all { matchesToken(it) }
+                val streetScore = AddressNormalizer.scoreStreetNamesMatch(normQuery, item.person.endereco)
 
                 if (allCoreTokensMatch) {
                     score = 200
@@ -380,16 +478,18 @@ class PersonRepositoryImpl(
                         val hasExactNumber = cleanQueryNumbers.any { qNum ->
                             item.pCleanNumber == qNum || item.pDigitsNumber == qNum || item.pRawNumber.equals(qNum, ignoreCase = true)
                         }
-                        if (hasExactNumber && AddressNormalizer.areStreetNamesMatching(normQuery, item.person.endereco)) {
+                        if (hasExactNumber && streetScore > 0) {
                             score += 800 // Bônus: bateu a rua e o número exato!
                         } else if (hasExactNumber) {
                             score += 100
                         }
                     }
 
-                    // Bônus se a rua bate com a busca
+                    // Bônus se a rua bate com a busca (exata, parcial ou em ordem trocada)
                     if (item.pNormStreet.contains(normQuery) || item.pStrippedStreet.contains(normQuery) || normQuery.contains(item.pStrippedStreet)) {
-                        score += 300
+                        score += 350
+                    } else if (streetScore > 0) {
+                        score += streetScore * 3
                     }
 
                     // Bônus se o nome bate
@@ -403,10 +503,14 @@ class PersonRepositoryImpl(
                     }
                 }
 
-                // Verificação adicional de endereço completo via AddressNormalizer
-                if (score == 0 && AddressNormalizer.matchesPrecise(trimmed, item.person.endereco, item.person.numero, item.person.complemento)) {
-                    score = 700
-                } else if (score == 0 && cleanQueryNumbers.isEmpty() && AddressNormalizer.matches(trimmed, item.person.endereco)) {
+                // Verificação adicional de endereço inteligente via AddressNormalizer (apenas quando streetScore > 0 para evitar reprocessamento em massa)
+                if (score == 0 && streetScore > 0) {
+                    if (cleanQueryNumbers.isNotEmpty() && AddressNormalizer.matchesPrecise(trimmed, item.person.endereco, item.person.numero, item.person.complemento)) {
+                        score = 700
+                    } else if (cleanQueryNumbers.isEmpty()) {
+                        score = 200 + (streetScore * 3)
+                    }
+                } else if (score == 0 && cleanQueryNumbers.isEmpty() && coreTokens.size == 1 && coreTokens[0].length >= 6 && AddressNormalizer.matches(trimmed, item.person.endereco)) {
                     score = 300
                 }
             }
@@ -457,66 +561,427 @@ class PersonRepositoryImpl(
                 numberIndexMap[effectiveNumber] ?: numberIndexMap[normEffectiveNumber]
             } else null
 
-            val wordBucket = if (keyword.isNotBlank()) {
-                wordIndexMap[keyword]
-            } else null
+            val candidateSet = LinkedHashSet<IndexedPerson>()
+            if (numBucket != null) {
+                candidateSet.addAll(numBucket)
+            }
+            for (w in sigWords) {
+                if (w.length >= 2) {
+                    wordIndexMap[w]?.let { candidateSet.addAll(it) }
+                }
+            }
 
-            if (numBucket != null || wordBucket != null) {
-                val candidateSet = LinkedHashSet<IndexedPerson>((numBucket?.size ?: 0) + (wordBucket?.size ?: 0))
-                if (numBucket != null) candidateSet.addAll(numBucket)
-                if (wordBucket != null) candidateSet.addAll(wordBucket)
-                candidateSet.take(200).map { it.person }
+            if (candidateSet.isNotEmpty()) {
+                candidateSet.map { it.person }
             } else {
+                // Fallback inteligente para variações ortográficas, prefixos ou palavras coladas
                 cached.filter { item ->
-                    (effectiveNumber.isNotBlank() && (item.pCleanNumber == effectiveNumber || item.pDigitsNumber == effectiveNumber || item.pRawNumber == effectiveNumber || item.fullSearchable.contains(effectiveNumber))) ||
-                    (keyword.isNotBlank() && (item.pNormStreet.contains(keyword) || item.pNormName.contains(keyword) || item.sigWords.contains(keyword)))
-                }.take(200).map { it.person }
+                    val numHit = effectiveNumber.isNotBlank() && (
+                        item.pCleanNumber == effectiveNumber ||
+                        item.pDigitsNumber == effectiveNumber ||
+                        item.pRawNumber == effectiveNumber ||
+                        item.fullSearchable.contains(effectiveNumber)
+                    )
+                    numHit || AddressNormalizer.scoreStreetNamesMatch(queryStreet, item.person.endereco) > 0
+                }.map { it.person }
             }
         } else {
             // Fallback para consulta SQL caso o cache ainda esteja na primeira inicialização
-            var dbCandidates = personDao.findCandidatePersons(effectiveNumber, keyword)
-            if (dbCandidates.isEmpty()) {
+            val dbCandidateSet = LinkedHashMap<Long, Person>()
+            personDao.findCandidatePersons(effectiveNumber, keyword).forEach { dbCandidateSet[it.id] = it }
+            for (w in sigWords) {
+                if (w != keyword && (w.length >= 3 || w.any { c -> c.isLetter() })) {
+                    personDao.findCandidatePersons(effectiveNumber, w).forEach { dbCandidateSet[it.id] = it }
+                }
+            }
+            if (dbCandidateSet.isEmpty() && normEffectiveNumber != effectiveNumber && normEffectiveNumber.isNotBlank()) {
+                personDao.findCandidatePersons(normEffectiveNumber, keyword).forEach { dbCandidateSet[it.id] = it }
+            }
+            if (dbCandidateSet.isEmpty() && keyword.isNotBlank()) {
                 for (w in sigWords) {
-                    if (w != keyword && (w.length >= 3 || w.any { c -> c.isLetter() })) {
-                        dbCandidates = personDao.findCandidatePersons(effectiveNumber, w)
-                        if (dbCandidates.isNotEmpty()) break
+                    if (w.length >= 2) {
+                        personDao.findCandidatePersons("", w).forEach { dbCandidateSet[it.id] = it }
                     }
                 }
             }
-            if (dbCandidates.isEmpty() && normEffectiveNumber != effectiveNumber && normEffectiveNumber.isNotBlank()) {
-                dbCandidates = personDao.findCandidatePersons(normEffectiveNumber, keyword)
-            }
-            if (dbCandidates.isEmpty() && keyword.isNotBlank()) {
-                dbCandidates = personDao.findCandidatePersons("", keyword)
-            }
-            dbCandidates
+            dbCandidateSet.values.toList()
         }
         if (candidates.isEmpty()) return@withContext emptyList()
 
-        // Match preciso de endereço: OBRIGATORIAMENTE rua E número devem bater juntos!
+        // Match inteligente de endereço: rua (completa, parcial ou reordenada) E número (quando presente)
         val hasQueryComplement = parsedRaw.complement.isNotBlank()
-        val rawMatches = candidates.filter { p ->
-            val streetMatches = AddressNormalizer.areStreetNamesMatching(queryStreet, p.endereco)
+        val scoredMatches = candidates.mapNotNull { p ->
+            val streetScore = AddressNormalizer.scoreStreetNamesMatch(queryStreet, p.endereco)
+            if (streetScore <= 0) return@mapNotNull null
+
             val numMatches = if (hasSpecificNumber && effectiveNumber.isNotBlank()) {
                 val pNum = p.numero.trim()
                 val parsedP = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento)
                 val targetNum = pNum.ifBlank { parsedP.number }
                 targetNum.isNotBlank() && AddressNormalizer.areNumbersMatching(effectiveNumber, targetNum)
             } else true
+            if (!numMatches) return@mapNotNull null
 
-            streetMatches && numMatches && (
+            val isPreciseMatch =
                 AddressNormalizer.matchesPrecise(rawAddress, p.endereco, p.numero, p.complemento) ||
                 AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero}", p.numero, p.complemento) ||
                 AddressNormalizer.matchesPrecise(rawAddress, "${p.endereco}, ${p.numero} ${p.complemento} ${p.bairro} ${p.cidade}", p.numero, p.complemento) ||
                 (!hasQueryComplement && parsedRaw.street.isNotBlank() && parsedRaw.number.isNotBlank() && AddressNormalizer.matchesPrecise("${parsedRaw.street}, ${parsedRaw.number}", p.endereco, p.numero, p.complemento))
-            )
-        }.distinctBy { it.id }
 
-        if (rawMatches.isNotEmpty()) {
-            sortPersonsByStreetNameOnly(rawMatches)
+            if (isPreciseMatch) Pair(p, streetScore) else null
+        }.distinctBy { it.first.id }
+
+        if (scoredMatches.isNotEmpty()) {
+            scoredMatches.sortedWith(
+                compareByDescending<Pair<Person, Int>> { it.second }
+                    .thenBy { (indexedPersonCache[it.first.id] ?: indexPerson(it.first)).streetSortKey }
+                    .thenBy { (indexedPersonCache[it.first.id] ?: indexPerson(it.first)).numValue }
+                    .thenBy { (indexedPersonCache[it.first.id] ?: indexPerson(it.first)).unitKey }
+                    .thenByDescending { it.first.dataAtualizacao }
+            ).map { it.first }
         } else {
             emptyList()
         }
+    }
+
+    private fun isSubsequenceMatch(shortStr: String, longStr: String): Boolean {
+        if (shortStr.length < 3 || longStr.length < shortStr.length) return false
+        if (shortStr[0] != longStr[0]) return false
+        if (longStr.length > shortStr.length * 2 + 2) return false
+        var i = 0
+        var j = 0
+        while (i < shortStr.length && j < longStr.length) {
+            if (shortStr[i] == longStr[j]) i++
+            j++
+        }
+        return i == shortStr.length
+    }
+
+    private fun scoreTokenAgainstWords(token: String, words: List<String>, fullField: String): Int {
+        if (token.isBlank()) return 0
+        var best = 0
+        val tokenLen = token.length
+        val isNumeric = token.all { it.isDigit() }
+        val maxDist = when {
+            isNumeric -> 0
+            tokenLen <= 2 -> 0
+            tokenLen <= 5 -> 1
+            tokenLen <= 9 -> 2
+            else -> 3
+        }
+        for (w in words) {
+            if (w == token) return 100
+            if (tokenLen >= 2 && w.startsWith(token)) {
+                val prefixScore = if (w.length == tokenLen) 100 else 86 + (tokenLen * 10 / w.length).coerceAtMost(10)
+                if (prefixScore > best) best = prefixScore
+                continue
+            }
+            if (tokenLen >= 4 && w.length >= 3 && token.startsWith(w)) {
+                if (80 > best) best = 80
+                continue
+            }
+            if (!isNumeric && tokenLen >= 3 && w.contains(token)) {
+                if (76 > best) best = 76
+                continue
+            }
+            if (maxDist > 0 && kotlin.math.abs(w.length - tokenLen) <= maxDist) {
+                val dist = AddressNormalizer.levenshteinDistance(token, w)
+                if (dist <= maxDist) {
+                    val maxL = maxOf(tokenLen, w.length)
+                    val fuzzyScore = (42 + ((maxL - dist).toFloat() / maxL * 32f)).toInt().coerceIn(42, 74)
+                    if (fuzzyScore > best) best = fuzzyScore
+                }
+            }
+            if (!isNumeric && best < 55 && isSubsequenceMatch(token, w)) {
+                best = 55
+            }
+        }
+        if (best < 72 && tokenLen >= 3 && fullField.contains(token)) {
+            best = 72
+        }
+        return best
+    }
+
+    override suspend fun fuzzySearchForBubble(
+        query: String,
+        maxResults: Int
+    ): BubbleFuzzySearchResult = withContext(Dispatchers.Default) {
+        val safeLimit = maxResults.coerceIn(1, 200)
+        val trimmed = query.trim()
+        val cachedList = cachedIndexedPersons.value
+        val list = if (cachedList.isNotEmpty()) {
+            cachedList
+        } else {
+            try {
+                personDao.getAllPersonsDirect().map { indexPerson(it) }
+            } catch (_: Throwable) {
+                emptyList()
+            }
+        }
+
+        if (list.isEmpty()) {
+            return@withContext BubbleFuzzySearchResult(emptyList(), 0, false)
+        }
+        if (trimmed.isBlank()) {
+            val limited = list.take(safeLimit).map { it.person }
+            return@withContext BubbleFuzzySearchResult(limited, list.size, list.size > safeLimit)
+        }
+
+        val normQuery = AddressNormalizer.normalize(trimmed)
+        if (normQuery.isBlank()) {
+            return@withContext BubbleFuzzySearchResult(emptyList(), 0, false)
+        }
+
+        val digitsQuery = trimmed.filter { it.isDigit() }
+        val queryTokens = normQuery.split(" ").filter { it.isNotBlank() }
+        val commonPrefixes = setOf(
+            "RUA", "R", "AV", "AVENIDA", "TRAVESSA", "TRAV", "TV", "ALAMEDA", "AL",
+            "PRACA", "PCA", "PR", "RODOVIA", "ROD", "ESTRADA", "EST",
+            "DR", "DRA", "DOUTOR", "DOUTORA", "CEL", "CORONEL", "PROF", "PROFESSOR",
+            "STA", "SANTA", "STO", "SANTO",
+            "DE", "DA", "DO", "DOS", "DAS", "E", "EM", "NO", "NA", "NOS", "NAS", "AO", "AOS",
+            "NUMERO", "NUM", "N", "NO", "CASA", "CS", "AP", "APT", "APTO", "BLOCO", "BL"
+        )
+        val coreTokens = if (queryTokens.size > 1) {
+            queryTokens.filter { it !in commonPrefixes }.ifEmpty { queryTokens }
+        } else {
+            queryTokens
+        }.distinct()
+
+        val cleanQueryNumbers = AddressNormalizer.extractNumbers(trimmed)
+            .map { AddressNormalizer.normalizeNumber(it) }
+            .filter { it.isNotBlank() }
+            .distinct()
+        val parsedQueryAddr = AddressNormalizer.parseAddressComponents(trimmed)
+        val strippedQueryStreet = AddressNormalizer.stripStreetType(parsedQueryAddr.street)
+        val normStrippedQueryStreet = AddressNormalizer.normalize(strippedQueryStreet)
+        val queryHasStreetAndNumber = parsedQueryAddr.street.isNotBlank() &&
+            strippedQueryStreet.isNotBlank() &&
+            !strippedQueryStreet.all { it.isDigit() || it == '-' || it == ',' || it == '.' } &&
+            cleanQueryNumbers.isNotEmpty()
+        val isNumberOnlySearch = queryTokens.all { token ->
+            token.all { it.isDigit() } || token in setOf("N", "NUM", "NUMERO", "NO", "CASA", "CS", "AP", "APT", "APTO")
+        } && cleanQueryNumbers.isNotEmpty()
+        val primaryQueryNumber = cleanQueryNumbers.firstOrNull() ?: ""
+        val streetAlphaTokens = coreTokens.filter { token -> !token.all { it.isDigit() } }
+
+        // Seleção rápida de candidatos pelos índices invertidos (com fallback completo para erros de digitação)
+        val wordMapSnapshot = wordIndexMap
+        val numMapSnapshot = numberIndexMap
+        val candidates: List<IndexedPerson> = if (list.size <= 450 || wordMapSnapshot.isEmpty()) {
+            list
+        } else {
+            val candidateSet = LinkedHashSet<IndexedPerson>(256)
+            for (qNum in cleanQueryNumbers) {
+                numMapSnapshot[qNum]?.let { candidateSet.addAll(it) }
+            }
+            for (token in coreTokens) {
+                if (token.length >= 2) {
+                    wordMapSnapshot[token]?.let { candidateSet.addAll(it) }
+                }
+                val tokenLen = token.length
+                val isNum = token.all { it.isDigit() }
+                val maxDist = when {
+                    isNum -> 0
+                    tokenLen <= 2 -> 0
+                    tokenLen <= 5 -> 1
+                    tokenLen <= 9 -> 2
+                    else -> 3
+                }
+                for ((key, bucket) in wordMapSnapshot) {
+                    if (key.startsWith(token) || (tokenLen >= 3 && key.contains(token))) {
+                        candidateSet.addAll(bucket)
+                    } else if (maxDist > 0 && kotlin.math.abs(key.length - tokenLen) <= maxDist) {
+                        val sameStartOrEnd = key[0] == token[0] || key.last() == token.last()
+                        if (sameStartOrEnd && AddressNormalizer.levenshteinDistance(token, key) <= maxDist) {
+                            candidateSet.addAll(bucket)
+                        }
+                    }
+                }
+                if (isNum) {
+                    for ((k, bucket) in numMapSnapshot) {
+                        if (k.contains(token)) candidateSet.addAll(bucket)
+                    }
+                }
+            }
+            if (candidateSet.size < 15) list else candidateSet.toList()
+        }
+
+        data class FuzzyCandidate(val item: IndexedPerson, val score: Int, val matchedCount: Int)
+
+        val scored = ArrayList<FuzzyCandidate>(candidates.size.coerceAtMost(256))
+        val normQueryComplement = AddressNormalizer.normalize(parsedQueryAddr.complement)
+
+        for (item in candidates) {
+            var totalScore = 0
+            var matchedTokens = 0
+            var streetMatchedTokens = 0
+            var nameMatchedTokens = 0
+            var hasNumberMatch = false
+            var exactNumberMatch = false
+
+            // 1. Correspondência de Número da residência
+            if (cleanQueryNumbers.isNotEmpty()) {
+                for (qNum in cleanQueryNumbers) {
+                    if (item.pCleanNumber == qNum || item.pDigitsNumber == qNum || item.pRawNumber.equals(qNum, ignoreCase = true)) {
+                        exactNumberMatch = true
+                        hasNumberMatch = true
+                        break
+                    } else if (
+                        item.pCleanNumber.startsWith(qNum) ||
+                        item.pDigitsNumber.startsWith(qNum) ||
+                        (qNum.length >= 2 && (item.pCleanNumber.contains(qNum) || item.pDigitsNumber.contains(qNum)))
+                    ) {
+                        hasNumberMatch = true
+                    }
+                }
+            }
+
+            if (isNumberOnlySearch && primaryQueryNumber.isNotBlank()) {
+                when {
+                    exactNumberMatch -> totalScore += 1200
+                    hasNumberMatch && (item.pCleanNumber.startsWith(primaryQueryNumber) || item.pDigitsNumber.startsWith(primaryQueryNumber)) -> totalScore += 820
+                    hasNumberMatch -> totalScore += 560
+                    item.pNormComplement.contains(primaryQueryNumber) -> totalScore += 460
+                    item.pNormStreet.contains(primaryQueryNumber) -> totalScore += 380
+                    item.pDigitsDoc.contains(primaryQueryNumber) || item.pCoRecDocs.any { it.contains(primaryQueryNumber) } -> totalScore += 340
+                }
+            } else {
+                // 2. Pontuação fuzzy por token em cada campo relevante
+                for (token in coreTokens) {
+                    val isDigitToken = token.all { it.isDigit() }
+                    val nameS = scoreTokenAgainstWords(token, item.nameWords, item.pNormName)
+                    val streetS = scoreTokenAgainstWords(token, item.sigWords.ifEmpty { item.pStrippedStreet.split(" ").filter { it.isNotBlank() } }, item.pNormStreet)
+                    val compS = scoreTokenAgainstWords(token, item.compWords, item.pNormComplement)
+                    val bairroS = scoreTokenAgainstWords(token, item.bairroWords, item.pNormBairro)
+                    val docS = when {
+                        item.pDigitsDoc == token || item.pCoRecDocs.any { it == token } -> 100
+                        token.length >= 3 && (item.pDigitsDoc.contains(token) || item.pCoRecDocs.any { it.contains(token) } || item.pNormDoc.contains(token)) -> 90
+                        else -> 0
+                    }
+                    val numS = if (isDigitToken) {
+                        when {
+                            item.pCleanNumber == token || item.pDigitsNumber == token || item.pRawNumber.equals(token, ignoreCase = true) -> 100
+                            item.pCleanNumber.startsWith(token) || item.pDigitsNumber.startsWith(token) -> 80
+                            token.length >= 2 && (item.pCleanNumber.contains(token) || item.pDigitsNumber.contains(token)) -> 60
+                            else -> 0
+                        }
+                    } else 0
+
+                    val weightedBest = maxOf(
+                        (nameS * 1.35f).toInt(),
+                        (streetS * 1.25f).toInt(),
+                        (docS * 1.30f).toInt(),
+                        (numS * 1.15f).toInt(),
+                        (compS * 0.95f).toInt(),
+                        (bairroS * 0.80f).toInt()
+                    )
+
+                    if (weightedBest > 0) {
+                        totalScore += weightedBest
+                        matchedTokens++
+                        if (streetS >= 45) streetMatchedTokens++
+                        if (nameS >= 45) nameMatchedTokens++
+                    }
+                }
+
+                // Se query possui Rua + Número explícitos, evita retornar casas de outras ruas só pelo número
+                if (queryHasStreetAndNumber && streetAlphaTokens.isNotEmpty() && streetMatchedTokens == 0 && nameMatchedTokens == 0) {
+                    continue
+                }
+
+                // 3. Bônus por correspondência de frase completa / cobertura de tokens
+                val coverageRatio = if (coreTokens.isNotEmpty()) matchedTokens.toFloat() / coreTokens.size else 0f
+                if (coreTokens.size >= 2) {
+                    if (matchedTokens == coreTokens.size) {
+                        totalScore += 360
+                    } else if (coverageRatio >= 0.6f) {
+                        totalScore += (coverageRatio * 180f).toInt()
+                    } else if (matchedTokens == 1 && coreTokens.size >= 3 && streetMatchedTokens == 0 && nameMatchedTokens == 0) {
+                        // Evita ruído fraco em buscas longas quando apenas 1 token secundário coincide
+                        totalScore = 0
+                    }
+                }
+
+                // Bônus de frase no Nome ou Co-recebedor
+                if (item.pNormName.isNotBlank()) {
+                    when {
+                        item.pNormName == normQuery -> totalScore += 900
+                        item.pNormName.startsWith(normQuery) -> totalScore += 620
+                        normQuery.length >= 3 && item.pNormName.contains(normQuery) -> totalScore += 450
+                        normQuery.length >= 3 && item.pCoRecNames.any { it.contains(normQuery) } -> totalScore += 420
+                    }
+                }
+
+                // Bônus de frase / proximidade na Rua
+                if (item.pStrippedStreet.isNotBlank()) {
+                    val streetTarget = if (normStrippedQueryStreet.isNotBlank()) normStrippedQueryStreet else normQuery
+                    when {
+                        item.pStrippedStreet == streetTarget || item.pNormStreet == normQuery -> totalScore += 820
+                        streetTarget.length >= 3 && item.pStrippedStreet.startsWith(streetTarget) -> totalScore += 520
+                        streetTarget.length >= 3 && item.pStrippedStreet.contains(streetTarget) -> totalScore += 380
+                    }
+                }
+
+                // Bônus de documento numérico (CPF/RG)
+                if (digitsQuery.length >= 3) {
+                    if (item.pDigitsDoc == digitsQuery || item.pCoRecDocs.any { it == digitsQuery }) {
+                        totalScore += 950
+                    } else if (item.pDigitsDoc.contains(digitsQuery) || item.pCoRecDocs.any { it.contains(digitsQuery) }) {
+                        totalScore += 600
+                    }
+                }
+
+                // Bônus de Rua + Número casando juntos
+                if (cleanQueryNumbers.isNotEmpty() && streetMatchedTokens > 0) {
+                    if (exactNumberMatch) {
+                        totalScore += 850
+                    } else if (hasNumberMatch) {
+                        totalScore += 320
+                    } else if (queryHasStreetAndNumber) {
+                        // Penaliza suavemente se a rua bateu mas o número é diferente
+                        totalScore = (totalScore * 0.55f).toInt()
+                    }
+                }
+
+                // Bônus de complemento
+                if (normQueryComplement.isNotBlank() && item.pNormComplement.contains(normQueryComplement)) {
+                    totalScore += 220
+                }
+            }
+
+            // Threshold mínimo para eliminar falsos positivos insignificantes
+            val minThreshold = when {
+                isNumberOnlySearch -> 200
+                coreTokens.size == 1 && coreTokens[0].length <= 2 -> 80
+                coreTokens.size == 1 -> 55
+                else -> 95
+            }
+
+            if (totalScore >= minThreshold) {
+                if (item.person.documento.isNotBlank()) totalScore += 8
+                if (item.person.assinatura.isNotBlank()) totalScore += 4
+                scored.add(FuzzyCandidate(item, totalScore, matchedTokens))
+            }
+        }
+
+        val sorted = scored.sortedWith(
+            compareByDescending<FuzzyCandidate> { it.score }
+                .thenByDescending { it.matchedCount }
+                .thenByDescending { it.item.person.dataAtualizacao }
+                .thenBy { it.item.streetSortKey }
+                .thenBy { it.item.numValue }
+                .thenBy { it.item.unitKey }
+                .thenBy { it.item.nameLower }
+        )
+
+        val totalMatches = sorted.size
+        val limited = if (totalMatches > safeLimit) sorted.take(safeLimit) else sorted
+        BubbleFuzzySearchResult(
+            items = limited.map { it.item.person },
+            totalMatches = totalMatches,
+            isLimited = totalMatches > safeLimit
+        )
     }
 
     override suspend fun insertPerson(person: Person): Long {
@@ -925,6 +1390,7 @@ class PersonRepositoryImpl(
                 dataAtualizacao = System.currentTimeMillis()
             )
             personDao.updatePerson(updated)
+            com.example.util.SavedRecipientLookupHelper.invalidateCache()
             return@withContext true
         }
 
@@ -962,13 +1428,17 @@ class PersonRepositoryImpl(
                 )
                 personDao.updatePerson(updatedTarget)
             } else {
-                val existingExtras = Recebedor.listFromJson(targetPerson.coRecebedoresJson).toMutableList()
-                existingExtras.add(newRec)
-                val updatedTarget = targetPerson.copy(
-                    coRecebedoresJson = Recebedor.listToJson(existingExtras.distinctBy { "${it.nome.trim().lowercase()}_${it.documento.trim()}" }),
-                    dataAtualizacao = System.currentTimeMillis()
-                )
-                personDao.updatePerson(updatedTarget)
+                val mainMatches = targetPerson.nome.trim().equals(newRec.nome, ignoreCase = true) &&
+                    targetPerson.documento.trim() == newRec.documento
+                if (!mainMatches) {
+                    val existingExtras = Recebedor.listFromJson(targetPerson.coRecebedoresJson).toMutableList()
+                    existingExtras.add(newRec)
+                    val updatedTarget = targetPerson.copy(
+                        coRecebedoresJson = Recebedor.listToJson(existingExtras.distinctBy { "${it.nome.trim().lowercase()}_${it.documento.trim()}" }),
+                        dataAtualizacao = System.currentTimeMillis()
+                    )
+                    personDao.updatePerson(updatedTarget)
+                }
             }
         } else {
             // Cria um novo registro de residência para o novo complemento
@@ -987,14 +1457,20 @@ class PersonRepositoryImpl(
 
         // Se foi mover, remove do cadastro de origem onde existiam outros moradores
         if (isMove && freshSource != null && freshSource.id > 0) {
+            val cleanTargetId = receiver.id
+                .removePrefix("p_${freshSource.id}_co_")
+                .removePrefix("p_${freshSource.id}_")
             val matchIndex = allSourceReceivers.indexOfFirst {
-                it.id == receiver.id || (it.nome.trim().equals(receiver.nome.trim(), ignoreCase = true) && it.documento.trim() == receiver.documento.trim())
+                it.id == receiver.id ||
+                it.id == cleanTargetId ||
+                (it.nome.trim().equals(receiver.nome.trim(), ignoreCase = true) && it.documento.trim() == receiver.documento.trim())
             }
             if (matchIndex != -1) {
                 removeReceiverFromPerson(freshSource, matchIndex)
             }
         }
 
+        com.example.util.SavedRecipientLookupHelper.invalidateCache()
         true
     }
 

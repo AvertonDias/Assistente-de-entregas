@@ -264,122 +264,146 @@ fun AuthScreen(
 
                     // Campo Nome (apenas Cadastro)
                     if (uiState.isRegisterMode) {
-                        OutlinedTextField(
-                            value = uiState.name,
-                            onValueChange = { viewModel.updateName(it) },
-                            label = { Text("Nome completo", fontWeight = FontWeight.Medium) },
-                            placeholder = { Text("Digite seu nome") },
-                            leadingIcon = {
-                                Icon(Icons.Default.Person, contentDescription = null)
-                            },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("input_name"),
-                            colors = authFieldColors
-                        )
+                        com.example.ui.components.PasteSupportBox(
+                            text = uiState.name,
+                            onPasteText = { viewModel.updateName(it) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = uiState.name,
+                                onValueChange = { viewModel.updateName(it) },
+                                label = { Text("Nome completo", fontWeight = FontWeight.Medium) },
+                                placeholder = { Text("Digite seu nome") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Person, contentDescription = null)
+                                },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("input_name"),
+                                colors = authFieldColors
+                            )
+                        }
                         Spacer(modifier = Modifier.height(12.dp))
                     }
 
                     // Campo E-mail
-                    OutlinedTextField(
-                        value = uiState.email,
-                        onValueChange = { viewModel.updateEmail(it) },
-                        label = { Text("E-mail", fontWeight = FontWeight.Medium) },
-                        placeholder = { Text("exemplo@email.com") },
-                        leadingIcon = {
-                            Icon(Icons.Default.Email, contentDescription = null)
-                        },
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Email,
-                            imeAction = ImeAction.Next
-                        ),
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("input_email"),
-                        colors = authFieldColors
-                    )
+                    com.example.ui.components.PasteSupportBox(
+                        text = uiState.email,
+                        onPasteText = { viewModel.updateEmail(it) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = uiState.email,
+                            onValueChange = { viewModel.updateEmail(it) },
+                            label = { Text("E-mail", fontWeight = FontWeight.Medium) },
+                            placeholder = { Text("exemplo@email.com") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Email, contentDescription = null)
+                            },
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Email,
+                                imeAction = ImeAction.Next
+                            ),
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("input_email"),
+                            colors = authFieldColors
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Campo Senha
-                    OutlinedTextField(
-                        value = uiState.password,
-                        onValueChange = { viewModel.updatePassword(it) },
-                        label = { Text("Senha", fontWeight = FontWeight.Medium) },
-                        placeholder = { Text("Digite sua senha") },
-                        leadingIcon = {
-                            Icon(Icons.Default.Lock, contentDescription = null)
-                        },
-                        trailingIcon = {
-                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                Icon(
-                                    imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = if (passwordVisible) "Ocultar senha" else "Mostrar senha"
-                                )
-                            }
-                        },
-                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Password,
-                            imeAction = if (uiState.isRegisterMode) ImeAction.Next else ImeAction.Done
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onDone = {
-                                focusManager.clearFocus()
-                                if (!uiState.isRegisterMode) {
-                                    viewModel.signInWithEmail { onAuthSuccess() }
-                                }
-                            }
-                        ),
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("input_password"),
-                        colors = authFieldColors
-                    )
-
-                    // Campo Confirmar Senha (apenas Cadastro)
-                    if (uiState.isRegisterMode) {
-                        Spacer(modifier = Modifier.height(12.dp))
+                    com.example.ui.components.PasteSupportBox(
+                        text = uiState.password,
+                        onPasteText = { viewModel.updatePassword(it) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         OutlinedTextField(
-                            value = uiState.confirmPassword,
-                            onValueChange = { viewModel.updateConfirmPassword(it) },
-                            label = { Text("Confirmar senha", fontWeight = FontWeight.Medium) },
-                            placeholder = { Text("Repita sua senha") },
+                            value = uiState.password,
+                            onValueChange = { viewModel.updatePassword(it) },
+                            label = { Text("Senha", fontWeight = FontWeight.Medium) },
+                            placeholder = { Text("Digite sua senha") },
                             leadingIcon = {
                                 Icon(Icons.Default.Lock, contentDescription = null)
                             },
                             trailingIcon = {
-                                IconButton(onClick = { confirmPasswordVisible = !confirmPasswordVisible }) {
+                                IconButton(onClick = { passwordVisible = !passwordVisible }) {
                                     Icon(
-                                        imageVector = if (confirmPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                        contentDescription = null
+                                        imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                        contentDescription = if (passwordVisible) "Ocultar senha" else "Mostrar senha"
                                     )
                                 }
                             },
-                            visualTransformation = if (confirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Password,
-                                imeAction = ImeAction.Done
+                                imeAction = if (uiState.isRegisterMode) ImeAction.Next else ImeAction.Done
                             ),
                             keyboardActions = KeyboardActions(
                                 onDone = {
                                     focusManager.clearFocus()
-                                    viewModel.signUpWithEmail { onAuthSuccess() }
+                                    if (!uiState.isRegisterMode) {
+                                        viewModel.signInWithEmail { onAuthSuccess() }
+                                    }
                                 }
                             ),
                             singleLine = true,
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .testTag("input_confirm_password"),
+                                .testTag("input_password"),
                             colors = authFieldColors
                         )
+                    }
+
+                    // Campo Confirmar Senha (apenas Cadastro)
+                    if (uiState.isRegisterMode) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        com.example.ui.components.PasteSupportBox(
+                            text = uiState.confirmPassword,
+                            onPasteText = { viewModel.updateConfirmPassword(it) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = uiState.confirmPassword,
+                                onValueChange = { viewModel.updateConfirmPassword(it) },
+                                label = { Text("Confirmar senha", fontWeight = FontWeight.Medium) },
+                                placeholder = { Text("Repita sua senha") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Lock, contentDescription = null)
+                                },
+                                trailingIcon = {
+                                    IconButton(onClick = { confirmPasswordVisible = !confirmPasswordVisible }) {
+                                        Icon(
+                                            imageVector = if (confirmPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                            contentDescription = null
+                                        )
+                                    }
+                                },
+                                visualTransformation = if (confirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Password,
+                                    imeAction = ImeAction.Done
+                                ),
+                                keyboardActions = KeyboardActions(
+                                    onDone = {
+                                        focusManager.clearFocus()
+                                        viewModel.signUpWithEmail { onAuthSuccess() }
+                                    }
+                                ),
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("input_confirm_password"),
+                                colors = authFieldColors
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(18.dp))

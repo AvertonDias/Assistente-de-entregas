@@ -679,14 +679,14 @@ object AccessibilityAutomationEngine {
                 val numMatches = targetNum.isNotBlank() && AddressNormalizer.areNumbersMatching(detectedNumber, targetNum)
                 val streetMatches = AddressNormalizer.areStreetNamesMatching(queryStreet, p.endereco)
                 numMatches && streetMatches
-            }
+            }.sortedByDescending { AddressNormalizer.scoreStreetNamesMatch(queryStreet, it.endereco) }
         } else {
             // Se o endereço na tela não tem número, só considera se a rua bater e houver no máximo 1 número cadastrado
             val distinctNumbers = rawMatched.map { it.numero.trim() }.filter { it.isNotBlank() }.distinct()
             if (distinctNumbers.size <= 1) {
                 rawMatched.filter { p ->
                     AddressNormalizer.areStreetNamesMatching(queryStreet, p.endereco)
-                }
+                }.sortedByDescending { AddressNormalizer.scoreStreetNamesMatch(queryStreet, it.endereco) }
             } else {
                 emptyList()
             }
@@ -891,6 +891,7 @@ object AccessibilityAutomationEngine {
         }
 
         var fallbackAddressWithoutNumber = ""
+        var compactFallbackWithNumber = ""
 
         for (i in indicesToSearch) {
             val rawText = texts[i].trim()
@@ -952,10 +953,37 @@ object AccessibilityAutomationEngine {
                         fallbackAddressWithoutNumber = cleaned
                     }
                 }
+            } else if (compactFallbackWithNumber.isBlank() && looksLikeCompactStreetAndNumber(text)) {
+                val cleaned = cleanAddressText(text)
+                if (cleaned.isNotBlank()) {
+                    compactFallbackWithNumber = cleaned
+                }
             }
         }
 
+        if (compactFallbackWithNumber.isNotBlank()) {
+            return compactFallbackWithNumber
+        }
         return fallbackAddressWithoutNumber
+    }
+
+    private fun looksLikeCompactStreetAndNumber(text: String): Boolean {
+        if (text.length !in 5..65) return false
+        val upper = text.uppercase(Locale.ROOT).trim()
+        val match = Regex("""^([A-ZÀ-Ÿ][A-ZÀ-Ÿ\s\.]{2,40}),?\s+(?:N[º°\.]?\s*)?(\d{1,5}[A-Za-z]?)$""").find(upper) ?: return false
+        val streetPart = match.groupValues[1].trim()
+        val firstWord = streetPart.split(" ").firstOrNull().orEmpty()
+        val nonAddressPrefixes = setOf(
+            "PEDIDO", "ORDEM", "OBJETO", "TENTATIVA", "PARADA", "PACOTE", "VOLUME", "TOTAL",
+            "ITEM", "ITENS", "UNIDADE", "SENHA", "CODIGO", "CÓDIGO", "CEP", "TEL", "FONE",
+            "CEL", "CPF", "CNPJ", "RG", "DATA", "HORA", "VALOR", "PRECO", "PREÇO", "TROCO",
+            "TAXA", "PESO", "KM", "MIN", "SEG", "ETA", "ENTREGA", "ROTA", "LOTE", "CAIXA",
+            "SACO", "BAG", "ID", "NF", "ANDAR", "APTO", "APT", "AP", "BLOCO", "BL", "CASA",
+            "SALA", "QUADRA", "QD", "PORTA", "PORTAO", "PORTÃO", "PONTO", "PONTOS", "VOLTAR",
+            "VER", "CONFIRMAR", "CANCELAR", "ATRASO", "MINUTOS", "HORAS", "DIAS"
+        )
+        if (firstWord in nonAddressPrefixes) return false
+        return streetPart.count { it.isLetter() } >= 3
     }
 
     private fun looksLikeAddress(text: String): Boolean {
@@ -990,7 +1018,7 @@ object AccessibilityAutomationEngine {
         val hasTrigger = triggers.any { upper.contains(it) }
         val hasDigits = text.any { it.isDigit() }
         
-        // Tem logradouro/bairro ou formato de rua com número (ex: "São João, 120" ou "Brasil, 450")
+        // Tem logradouro/bairro ou formato de rua com número (ex: "São João, 120" ou "Vital, 120")
         return (hasTrigger && hasDigits) || (hasTrigger && upper.length > 8) || (hasDigits && (text.contains(",") || text.contains("-") || text.contains(";")) && text.length > 6)
     }
 

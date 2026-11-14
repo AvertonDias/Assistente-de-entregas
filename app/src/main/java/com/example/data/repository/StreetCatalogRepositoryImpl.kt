@@ -44,27 +44,42 @@ class StreetCatalogRepositoryImpl(
                 streetCatalogDao.getAllStreetsSync()
             }
 
-            val normQuery = AddressNormalizer.normalize(trimmedQuery)
-            val querySigWords = AddressNormalizer.extractStreetSignificantWords(trimmedQuery)
+            val parsedQueryStreet = AddressNormalizer.parseAddressComponents(trimmedQuery).street.ifBlank { trimmedQuery }
+            val normQuery = AddressNormalizer.normalize(parsedQueryStreet)
+            val querySigWords = AddressNormalizer.extractStreetSignificantWords(parsedQueryStreet)
 
-            allInCity.filter { street ->
+            allInCity.mapNotNull { street ->
                 val normStreet = AddressNormalizer.normalize(street.nomeCompleto)
                 val normBairro = AddressNormalizer.normalize(street.bairro)
+                val streetScore = AddressNormalizer.scoreStreetNamesMatch(parsedQueryStreet, street.nomeCompleto)
 
-                if (normStreet.contains(normQuery) || normBairro.contains(normQuery)) {
-                    return@filter true
-                }
+                val matches = normStreet.contains(normQuery) ||
+                    normBairro.contains(normQuery) ||
+                    streetScore > 0 ||
+                    (querySigWords.isNotEmpty() && run {
+                        val streetWords = AddressNormalizer.extractStreetSignificantWords(street.nomeCompleto)
+                        querySigWords.all { qWord ->
+                            streetWords.any { sWord -> sWord.contains(qWord) || AddressNormalizer.isSimilarWord(qWord, sWord) }
+                        }
+                    }) ||
+                    street.nome.contains(trimmedQuery, ignoreCase = true) ||
+                    street.bairro.contains(trimmedQuery, ignoreCase = true)
 
-                if (querySigWords.isNotEmpty()) {
-                    val streetWords = AddressNormalizer.extractStreetSignificantWords(street.nomeCompleto)
-                    if (querySigWords.all { qWord -> streetWords.any { sWord -> sWord.contains(qWord) || AddressNormalizer.isSimilarWord(qWord, sWord) } }) {
-                        return@filter true
+                if (matches) {
+                    val rank = when {
+                        normStreet == normQuery -> 200
+                        streetScore > 0 -> 100 + streetScore
+                        normStreet.contains(normQuery) -> 90
+                        else -> 50
                     }
+                    Pair(street, rank)
+                } else {
+                    null
                 }
-
-                street.nome.contains(trimmedQuery, ignoreCase = true) ||
-                street.bairro.contains(trimmedQuery, ignoreCase = true)
-            }.take(limit)
+            }
+                .sortedWith(compareByDescending<Pair<StreetCatalog, Int>> { it.second }.thenBy { it.first.nome })
+                .take(limit)
+                .map { it.first }
         }
     }
 

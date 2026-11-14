@@ -381,11 +381,35 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             }
         }
 
+        when (mode) {
+            OverlayMode.BUBBLE, OverlayMode.PANEL -> {
+                view.isFocusable = false
+                view.isFocusableInTouchMode = false
+            }
+            OverlayMode.MODAL, OverlayMode.FULLSCREEN_SIGNATURE -> {
+                view.isFocusable = true
+                view.isFocusableInTouchMode = true
+            }
+        }
+
         try {
             windowManager?.updateViewLayout(view, params)
+            if (mode == OverlayMode.MODAL || mode == OverlayMode.FULLSCREEN_SIGNATURE) {
+                view.post {
+                    try {
+                        if (!view.hasFocus()) {
+                            view.requestFocus()
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(com.example.util.LocaleHelper.applyPortugueseLocale(newBase))
     }
 
     override fun onCreate() {
@@ -687,19 +711,13 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
             }
         }
 
-        // Ao abrir modal para editar morador existente com CPF, verifica na API para sugerir correção
+        // Ao abrir modal para editar morador, reseta estados de sugestão/divergência sem consultar API automaticamente
         LaunchedEffect(isEditModalOpen, editingPersonId, editingRecebedorId) {
             officialApiName = null
             apiNameCorrectionSuggestion = null
             cpfLookupMessage = null
             lastAutoLookedUpCpf = ""
             savedRecipientFoundByName = null
-            if (isEditModalOpen) {
-                val digits = recipientDocument.filter { it.isDigit() }
-                if (digits.length == 11) {
-                    performCpfLookup(digits)
-                }
-            }
         }
 
         // Mantém a sugestão de divergência ativa apenas se o documento atual corresponder exatamente ao CPF consultado
@@ -1149,9 +1167,13 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             } else if (showAddComplementDialog) {
                                 closeAddComplementDialog()
                             } else if (showMoveOrCopyDialog) {
-                                showMoveOrCopyDialog = false
-                                if (!isEditModalOpen && !isSearchModalOpen && !isMultipleRecipientsModalOpen) {
-                                    updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
+                                if (!isExecutingMoveOrCopy) {
+                                    showMoveOrCopyDialog = false
+                                    moveOrCopyTargetReceiver = null
+                                    moveOrCopySourcePerson = null
+                                    if (!isEditModalOpen && !isSearchModalOpen && !isMultipleRecipientsModalOpen) {
+                                        updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
+                                    }
                                 }
                             } else if (isSearchModalOpen) {
                                 isSearchModalOpen = false
@@ -1193,30 +1215,145 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                 }
              } else if (isSearchModalOpen) {
                 // MODAL DE PESQUISA DE DESTINATÁRIOS SALVOS
+                val maxSearchPersonsLimit = 45
+                val maxSearchDisplayGroups = 20
                 var executedQuery by remember { mutableStateOf("") }
                 var isSearching by remember { mutableStateOf(false) }
+                var isCourierSprinting by remember { mutableStateOf(false) }
+                var courierProgress by remember { mutableStateOf(0f) }
+                var searchResults by remember { mutableStateOf<List<Person>>(emptyList()) }
+                var groupedSearchResults by remember { mutableStateOf<List<SearchAddressGroup>>(emptyList()) }
+                var totalFuzzyMatches by remember { mutableStateOf(0) }
+                var isResultsLimited by remember { mutableStateOf(false) }
+                var activeSearchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+                var activeAnimJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
                 val searchScope = rememberCoroutineScope()
 
-                val searchResults by remember(executedQuery) {
-                    if (executedQuery.isBlank()) {
-                        kotlinx.coroutines.flow.flowOf(emptyList<Person>())
-                    } else {
-                        DeliveryApp.instance.personRepository.searchPersons(executedQuery)
+                val buildGroupsFromPersons: (List<Person>) -> Pair<List<SearchAddressGroup>, Boolean> = { personsList ->
+                    val groups = linkedMapOf<String, MutableList<Person>>()
+                    for (p in personsList) {
+                        val parsed = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento, p.bairro)
+                        val streetKey = AddressNormalizer.normalize(parsed.street.ifBlank { p.endereco })
+                        val numKey = parsed.number.ifBlank { p.numero }.trim()
+                        val key = if (streetKey.isNotBlank()) "$streetKey|$numKey" else "p_${p.id}"
+                        groups.getOrPut(key) { mutableListOf() }.add(p)
                     }
-                }.collectAsState(initial = emptyList())
+                    val totalGroups = groups.size
+                    val limitedGroupLists = groups.values.take(maxSearchDisplayGroups)
+                    val mapped = limitedGroupLists.map { persons ->
+                        val first = persons.first()
+                        val parsed = AddressNormalizer.parseAddressComponents(first.endereco, first.numero, first.complemento, first.bairro)
+                        val street = parsed.street.ifBlank { first.endereco }
+                        val number = parsed.number.ifBlank { first.numero }
+                        val neighborhood = parsed.neighborhood.ifBlank { first.bairro }
+                        val comps = persons.map { it.complemento.trim() }.filter { it.isNotBlank() }.distinct()
+                        val byComp = linkedMapOf<String, MutableList<Person>>()
+                        val withoutComp = mutableListOf<Person>()
+                        for (p in persons) {
+                            val c = p.complemento.trim()
+                            if (c.isNotBlank()) {
+                                byComp.getOrPut(c) { mutableListOf() }.add(p)
+                            } else {
+                                withoutComp.add(p)
+                            }
+                        }
+                        val streetKey = AddressNormalizer.normalize(street)
+                        val numKey = number.trim()
+                        val addrKey = if (streetKey.isNotBlank()) "$streetKey|$numKey" else "p_${first.id}"
+                        SearchAddressGroup(
+                            addressKey = addrKey,
+                            street = street,
+                            number = number,
+                            neighborhood = neighborhood,
+                            complements = comps,
+                            personsByComplement = byComp,
+                            personsWithoutComplement = withoutComp,
+                            allPersons = persons
+                        )
+                    }
+                    mapped to (totalGroups > maxSearchDisplayGroups)
+                }
+
+                // Mantém resultados sincronizados caso ocorram edições/exclusões com o modal aberto
+                LaunchedEffect(executedQuery) {
+                    if (executedQuery.isBlank()) return@LaunchedEffect
+                    var skippedInitial = false
+                    DeliveryApp.instance.personRepository.getAllPersons()
+                        .collect {
+                            if (!skippedInitial) {
+                                skippedInitial = true
+                                return@collect
+                            }
+                            val fuzzyResult = withContext(Dispatchers.Default) {
+                                DeliveryApp.instance.personRepository.fuzzySearchForBubble(
+                                    query = executedQuery,
+                                    maxResults = maxSearchPersonsLimit
+                                )
+                            }
+                            val (groups, groupsLimited) = withContext(Dispatchers.Default) {
+                                buildGroupsFromPersons(fuzzyResult.items)
+                            }
+                            if (!isSearching) {
+                                searchResults = fuzzyResult.items
+                                groupedSearchResults = groups
+                                totalFuzzyMatches = fuzzyResult.totalMatches
+                                isResultsLimited = fuzzyResult.isLimited || groupsLimited
+                            }
+                        }
+                }
 
                 val performSearch: () -> Unit = {
                     val trimmed = searchModalQuery.trim()
+                    activeSearchJob?.cancel()
+                    activeAnimJob?.cancel()
                     if (trimmed.isNotBlank()) {
-                        isSearching = true
                         executedQuery = trimmed
-                        searchScope.launch {
-                            kotlinx.coroutines.delay(120)
-                            isSearching = false
+                        isSearching = true
+                        isCourierSprinting = true
+                        courierProgress = 0.06f
+
+                        activeAnimJob = searchScope.launch {
+                            var current = 0.06f
+                            while (isSearching) {
+                                kotlinx.coroutines.delay(24)
+                                if (current < 0.84f) {
+                                    current = (current + 0.045f).coerceAtMost(0.84f)
+                                    courierProgress = current
+                                }
+                            }
+                            while (current < 1.0f) {
+                                kotlinx.coroutines.delay(22)
+                                current = (current + 0.075f).coerceAtMost(1.0f)
+                                courierProgress = current
+                            }
+                            kotlinx.coroutines.delay(140)
+                            isCourierSprinting = false
+                        }
+
+                        activeSearchJob = searchScope.launch(Dispatchers.Default) {
+                            val fuzzyResult = DeliveryApp.instance.personRepository.fuzzySearchForBubble(
+                                query = trimmed,
+                                maxResults = maxSearchPersonsLimit
+                            )
+                            val (groups, groupsLimited) = buildGroupsFromPersons(fuzzyResult.items)
+
+                            withContext(Dispatchers.Main) {
+                                searchResults = fuzzyResult.items
+                                groupedSearchResults = groups
+                                totalFuzzyMatches = fuzzyResult.totalMatches
+                                isResultsLimited = fuzzyResult.isLimited || groupsLimited
+                                isSearching = false
+                            }
                         }
                     } else {
                         executedQuery = ""
                         isSearching = false
+                        isCourierSprinting = false
+                        courierProgress = 0f
+                        searchResults = emptyList()
+                        groupedSearchResults = emptyList()
+                        totalFuzzyMatches = 0
+                        isResultsLimited = false
                     }
                 }
 
@@ -1255,6 +1392,8 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             }
                             IconButton(
                                 onClick = {
+                                    activeSearchJob?.cancel()
+                                    activeAnimJob?.cancel()
                                     isSearchModalOpen = false
                                     updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
                                 },
@@ -1267,106 +1406,136 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                         HorizontalDivider(color = Color(0xFFE0E0E0))
 
                         // Campo de Busca com disparo na Lupa ou Enter
-                        OutlinedTextField(
-                            value = searchModalQuery,
-                            onValueChange = {
-                                searchModalQuery = it
-                                if (it.isBlank()) {
-                                    executedQuery = ""
-                                    isSearching = false
-                                }
+                        com.example.ui.components.PasteSupportBox(
+                            text = searchModalQuery,
+                            onPasteText = { pasted ->
+                                searchModalQuery = pasted
                             },
-                            placeholder = { Text("Nome, documento ou endereço...", fontSize = 12.sp) },
-                            keyboardOptions = KeyboardOptions(
-                                imeAction = ImeAction.Search,
-                                keyboardType = KeyboardType.Text
-                            ),
-                            keyboardActions = KeyboardActions(
-                                onSearch = { performSearch() }
-                            ),
-                            leadingIcon = {
-                                IconButton(
-                                    onClick = { performSearch() },
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Search,
-                                        contentDescription = "Buscar",
-                                        modifier = Modifier.size(20.dp),
-                                        tint = if (searchModalQuery.isNotBlank()) Color(0xFF1976D2) else Color.Gray
-                                    )
-                                }
-                            },
-                            trailingIcon = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (searchModalQuery.isNotEmpty()) {
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = searchModalQuery,
+                                onValueChange = {
+                                    searchModalQuery = it
+                                    if (it.isBlank()) {
+                                        activeSearchJob?.cancel()
+                                        activeAnimJob?.cancel()
+                                        executedQuery = ""
+                                        isSearching = false
+                                        isCourierSprinting = false
+                                        courierProgress = 0f
+                                        searchResults = emptyList()
+                                        groupedSearchResults = emptyList()
+                                        totalFuzzyMatches = 0
+                                        isResultsLimited = false
+                                    }
+                                },
+                                placeholder = { Text("Nome, documento ou endereço...", fontSize = 12.sp) },
+                                keyboardOptions = KeyboardOptions(
+                                    imeAction = ImeAction.Search,
+                                    keyboardType = KeyboardType.Text
+                                ),
+                                keyboardActions = KeyboardActions(
+                                    onSearch = { performSearch() }
+                                ),
+                                leadingIcon = {
+                                    IconButton(
+                                        onClick = { performSearch() },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = "Buscar",
+                                            modifier = Modifier.size(20.dp),
+                                            tint = if (searchModalQuery.isNotBlank()) Color(0xFF1976D2) else Color.Gray
+                                        )
+                                    }
+                                },
+                                trailingIcon = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (searchModalQuery.isNotEmpty()) {
+                                            IconButton(
+                                                onClick = {
+                                                    activeSearchJob?.cancel()
+                                                    activeAnimJob?.cancel()
+                                                    searchModalQuery = ""
+                                                    executedQuery = ""
+                                                    isSearching = false
+                                                    isCourierSprinting = false
+                                                    courierProgress = 0f
+                                                    searchResults = emptyList()
+                                                    groupedSearchResults = emptyList()
+                                                    totalFuzzyMatches = 0
+                                                    isResultsLimited = false
+                                                },
+                                                modifier = Modifier.size(26.dp)
+                                            ) {
+                                                Icon(Icons.Default.Close, contentDescription = "Limpar", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                                            }
+                                        }
                                         IconButton(
                                             onClick = {
-                                                searchModalQuery = ""
-                                                executedQuery = ""
-                                                isSearching = false
+                                                if (!isListeningSearch) {
+                                                    isListeningSearch = true
+                                                    com.example.util.SpeechHelper.startListening(
+                                                        context = serviceContext,
+                                                        onReady = { ToastHelper.show(serviceContext, "Fale o nome, documento ou rua...") },
+                                                        onResult = { result ->
+                                                            isListeningSearch = false
+                                                            val clean = com.example.util.SpeechHelper.processSpokenSearch(result)
+                                                            if (clean.isNotBlank()) {
+                                                                searchModalQuery = clean
+                                                                performSearch()
+                                                            }
+                                                        },
+                                                        onError = { err ->
+                                                            isListeningSearch = false
+                                                            ToastHelper.show(serviceContext, err)
+                                                        }
+                                                    )
+                                                }
                                             },
                                             modifier = Modifier.size(26.dp)
                                         ) {
-                                            Icon(Icons.Default.Close, contentDescription = "Limpar", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                                            Icon(
+                                                imageVector = Icons.Default.Mic,
+                                                contentDescription = "Falar Busca",
+                                                tint = if (isListeningSearch) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                modifier = Modifier.size(18.dp)
+                                            )
                                         }
-                                    }
-                                    IconButton(
-                                        onClick = {
-                                            if (!isListeningSearch) {
-                                                isListeningSearch = true
-                                                com.example.util.SpeechHelper.startListening(
-                                                    context = serviceContext,
-                                                    onReady = { ToastHelper.show(serviceContext, "Fale o nome, documento ou rua...") },
-                                                    onResult = { result ->
-                                                        isListeningSearch = false
-                                                        val clean = com.example.util.SpeechHelper.processSpokenSearch(result)
-                                                        if (clean.isNotBlank()) {
-                                                            searchModalQuery = clean
-                                                            performSearch()
-                                                        }
-                                                    },
-                                                    onError = { err ->
-                                                        isListeningSearch = false
-                                                        ToastHelper.show(serviceContext, err)
-                                                    }
-                                                )
-                                            }
-                                        },
-                                        modifier = Modifier.size(26.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Mic,
-                                            contentDescription = "Falar Busca",
-                                            tint = if (isListeningSearch) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    IconButton(
-                                        onClick = { performSearch() },
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Surface(
-                                            shape = CircleShape,
-                                            color = if (searchModalQuery.isNotBlank()) Color(0xFF1976D2) else Color(0xFFECEFF1),
-                                            modifier = Modifier.size(28.dp)
+                                        IconButton(
+                                            onClick = { performSearch() },
+                                            modifier = Modifier.size(32.dp)
                                         ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Search,
-                                                    contentDescription = "Pesquisar",
-                                                    tint = if (searchModalQuery.isNotBlank()) Color.White else Color.Gray,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = if (searchModalQuery.isNotBlank()) Color(0xFF1976D2) else Color(0xFFECEFF1),
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Search,
+                                                        contentDescription = "Pesquisar",
+                                                        tint = if (searchModalQuery.isNotBlank()) Color.White else Color.Gray,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
 
+                        // Barra de Progresso com Entregador Correndo com Caixa na Mão
+                        com.example.ui.components.CourierSearchProgressBar(
+                            visible = isSearching || isCourierSprinting,
+                            progress = courierProgress,
+                            statusText = if (isSearching) "Procurando no catálogo..." else "Concluindo busca..."
+                        )
 
                         // Barra de Ação Rápida de Cadastro na Busca
                         Row(
@@ -1374,23 +1543,13 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (isSearching) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(13.dp),
-                                        strokeWidth = 2.dp,
-                                        color = Color(0xFF1976D2)
-                                    )
-                                    Text(
-                                        text = "Buscando...",
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Color(0xFF1976D2)
-                                    )
-                                }
+                            if (isSearching || isCourierSprinting) {
+                                Text(
+                                    text = "Buscando...",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF1976D2)
+                                )
                             } else if (executedQuery.isBlank()) {
                                 Text(
                                     text = if (searchModalQuery.isNotBlank()) "Clique na lupa para pesquisar" else "Aguardando pesquisa",
@@ -1405,8 +1564,14 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                     color = Color(0xFFD32F2F)
                                 )
                             } else {
+                                val displayedCount = groupedSearchResults.sumOf { it.allPersons.size }
+                                val summaryText = if (isResultsLimited) {
+                                    "Top $displayedCount de $totalFuzzyMatches"
+                                } else {
+                                    "${searchResults.size} encontrado(s)"
+                                }
                                 Text(
-                                    text = "${searchResults.size} encontrado(s)",
+                                    text = summaryText,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = Color(0xFF1565C0)
@@ -1460,49 +1625,6 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             }
                         }
 
-                        // Agrupamento dos resultados de busca por endereço e complemento
-                        val groupedSearchResults = remember(searchResults) {
-                            val groups = linkedMapOf<String, MutableList<Person>>()
-                            for (p in searchResults) {
-                                val parsed = AddressNormalizer.parseAddressComponents(p.endereco, p.numero, p.complemento, p.bairro)
-                                val streetKey = AddressNormalizer.normalize(parsed.street.ifBlank { p.endereco })
-                                val numKey = parsed.number.ifBlank { p.numero }.trim()
-                                val key = if (streetKey.isNotBlank()) "$streetKey|$numKey" else "p_${p.id}"
-                                groups.getOrPut(key) { mutableListOf() }.add(p)
-                            }
-                            groups.values.map { persons ->
-                                val first = persons.first()
-                                val parsed = AddressNormalizer.parseAddressComponents(first.endereco, first.numero, first.complemento, first.bairro)
-                                val street = parsed.street.ifBlank { first.endereco }
-                                val number = parsed.number.ifBlank { first.numero }
-                                val neighborhood = parsed.neighborhood.ifBlank { first.bairro }
-                                val comps = persons.map { it.complemento.trim() }.filter { it.isNotBlank() }.distinct()
-                                val byComp = linkedMapOf<String, MutableList<Person>>()
-                                val withoutComp = mutableListOf<Person>()
-                                for (p in persons) {
-                                    val c = p.complemento.trim()
-                                    if (c.isNotBlank()) {
-                                        byComp.getOrPut(c) { mutableListOf() }.add(p)
-                                    } else {
-                                        withoutComp.add(p)
-                                    }
-                                }
-                                val streetKey = AddressNormalizer.normalize(street)
-                                val numKey = number.trim()
-                                val addrKey = if (streetKey.isNotBlank()) "$streetKey|$numKey" else "p_${first.id}"
-                                SearchAddressGroup(
-                                    addressKey = addrKey,
-                                    street = street,
-                                    number = number,
-                                    neighborhood = neighborhood,
-                                    complements = comps,
-                                    personsByComplement = byComp,
-                                    personsWithoutComplement = withoutComp,
-                                    allPersons = persons
-                                )
-                            }
-                        }
-
                         // Lista de Resultados
                         LazyColumn(
                             modifier = Modifier
@@ -1511,27 +1633,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             if (isSearching) {
-                                item {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 24.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(24.dp),
-                                            strokeWidth = 2.5.dp,
-                                            color = Color(0xFF1976D2)
-                                        )
-                                        Text(
-                                            text = "Buscando...",
-                                            fontSize = 12.5.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = Color(0xFF1976D2)
-                                        )
-                                    }
-                                }
+                                // A barra CourierSearchProgressBar acima já exibe o entregador correndo durante a busca
                             } else if (executedQuery.isBlank()) {
                                 item {
                                     Column(
@@ -2538,6 +2640,25 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         }
                                     }
                                 }
+                                if (isResultsLimited) {
+                                    item(key = "limit_footer_notice") {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = Color(0xFFF1F5F9),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = "Exibindo os ${groupedSearchResults.size} endereços mais relevantes de $totalFuzzyMatches resultado(s). Refine a pesquisa para ver outros.",
+                                                fontSize = 10.5.sp,
+                                                color = Color(0xFF475569),
+                                                textAlign = TextAlign.Center,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2556,7 +2677,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                     Card(
                         modifier = Modifier
                             .width(330.dp)
-                            .blur(if (showDiscardEditConfirmDialog || showBubbleClearSigConfirmDialog || showMoveOrCopyDialog || showDeleteReceiverConfirmDialog || showChangeComplementDialog) 12.dp else 0.dp)
+                            .blur(if (showDiscardEditConfirmDialog || showBubbleClearSigConfirmDialog || showDeleteReceiverConfirmDialog || showChangeComplementDialog) 12.dp else 0.dp)
                             .shadow(16.dp, RoundedCornerShape(16.dp)),
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -2756,9 +2877,9 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF424242)
                             )
-                            OutlinedTextField(
-                                value = editedStreet,
-                                onValueChange = { input ->
+                            com.example.ui.components.PasteSupportBox(
+                                text = editedStreet,
+                                onPasteText = { input ->
                                     if (input.contains(",") || input.contains(" - ") || input.contains("\n")) {
                                         val parsed = AddressNormalizer.parseAddressComponents(input)
                                         if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank() || parsed.neighborhood.isNotBlank())) {
@@ -2766,53 +2887,71 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                             if (parsed.number.isNotBlank()) editedNumber = parsed.number
                                             if (parsed.complement.isNotBlank()) editedComplement = parsed.complement
                                             if (parsed.neighborhood.isNotBlank()) editedNeighborhood = parsed.neighborhood
-                                            return@OutlinedTextField
+                                            return@PasteSupportBox
                                         }
                                     }
                                     editedStreet = input
                                 },
-                                placeholder = { Text("Ex: Rua das Flores", fontSize = 12.sp) },
-                                trailingIcon = {
-                                    IconButton(
-                                        onClick = {
-                                            if (!isListeningStreet) {
-                                                isListeningStreet = true
-                                                com.example.util.SpeechHelper.startListening(
-                                                    context = serviceContext,
-                                                    onReady = { ToastHelper.show(serviceContext, "Fale a rua...") },
-                                                    onResult = { result ->
-                                                        isListeningStreet = false
-                                                        val parsed = AddressNormalizer.parseAddressComponents(result)
-                                                        if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank() || parsed.neighborhood.isNotBlank())) {
-                                                            editedStreet = parsed.street
-                                                            if (parsed.number.isNotBlank()) editedNumber = parsed.number
-                                                            if (parsed.complement.isNotBlank()) editedComplement = parsed.complement
-                                                            if (parsed.neighborhood.isNotBlank()) editedNeighborhood = parsed.neighborhood
-                                                        } else {
-                                                            val st = com.example.util.SpeechHelper.processSpokenStreet(result)
-                                                            if (st.isNotBlank()) editedStreet = st
-                                                        }
-                                                    },
-                                                    onError = { err ->
-                                                        isListeningStreet = false
-                                                        ToastHelper.show(serviceContext, err)
-                                                    }
-                                                )
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = editedStreet,
+                                    onValueChange = { input ->
+                                        if (input.contains(",") || input.contains(" - ") || input.contains("\n")) {
+                                            val parsed = AddressNormalizer.parseAddressComponents(input)
+                                            if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank() || parsed.neighborhood.isNotBlank())) {
+                                                editedStreet = parsed.street
+                                                if (parsed.number.isNotBlank()) editedNumber = parsed.number
+                                                if (parsed.complement.isNotBlank()) editedComplement = parsed.complement
+                                                if (parsed.neighborhood.isNotBlank()) editedNeighborhood = parsed.neighborhood
+                                                return@OutlinedTextField
                                             }
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Mic,
-                                            contentDescription = "Falar Rua",
-                                            tint = if (isListeningStreet) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
+                                        }
+                                        editedStreet = input
+                                    },
+                                    placeholder = { Text("Ex: Rua das Flores", fontSize = 12.sp) },
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = {
+                                                if (!isListeningStreet) {
+                                                    isListeningStreet = true
+                                                    com.example.util.SpeechHelper.startListening(
+                                                        context = serviceContext,
+                                                        onReady = { ToastHelper.show(serviceContext, "Fale a rua...") },
+                                                        onResult = { result ->
+                                                            isListeningStreet = false
+                                                            val parsed = AddressNormalizer.parseAddressComponents(result)
+                                                            if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank() || parsed.neighborhood.isNotBlank())) {
+                                                                editedStreet = parsed.street
+                                                                if (parsed.number.isNotBlank()) editedNumber = parsed.number
+                                                                if (parsed.complement.isNotBlank()) editedComplement = parsed.complement
+                                                                if (parsed.neighborhood.isNotBlank()) editedNeighborhood = parsed.neighborhood
+                                                            } else {
+                                                                val st = com.example.util.SpeechHelper.processSpokenStreet(result)
+                                                                if (st.isNotBlank()) editedStreet = st
+                                                            }
+                                                        },
+                                                        onError = { err ->
+                                                            isListeningStreet = false
+                                                            ToastHelper.show(serviceContext, err)
+                                                        }
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Mic,
+                                                contentDescription = "Falar Rua",
+                                                tint = if (isListeningStreet) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                            }
 
                             if (streetSuggestions.isNotEmpty()) {
                                 Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp)) {
@@ -2870,44 +3009,50 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFF424242)
                                     )
-                                    OutlinedTextField(
-                                        value = editedNumber,
-                                        onValueChange = { editedNumber = it },
-                                        placeholder = { Text("Ex: 123", fontSize = 12.sp) },
-                                        trailingIcon = {
-                                            IconButton(
-                                                onClick = {
-                                                    if (!isListeningNumber) {
-                                                        isListeningNumber = true
-                                                        com.example.util.SpeechHelper.startListening(
-                                                            context = serviceContext,
-                                                            onReady = { ToastHelper.show(serviceContext, "Fale o número...") },
-                                                            onResult = { result ->
-                                                                isListeningNumber = false
-                                                                val num = com.example.util.SpeechHelper.processSpokenNumber(result)
-                                                                if (num.isNotBlank()) editedNumber = num
-                                                            },
-                                                            onError = { err ->
-                                                                isListeningNumber = false
-                                                                ToastHelper.show(serviceContext, err)
-                                                            }
-                                                        )
-                                                    }
-                                                },
-                                                modifier = Modifier.size(24.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Mic,
-                                                    contentDescription = "Falar Número",
-                                                    tint = if (isListeningNumber) MaterialTheme.colorScheme.primary else Color.Gray,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        singleLine = true
-                                    )
+                                    com.example.ui.components.PasteSupportBox(
+                                        text = editedNumber,
+                                        onPasteText = { editedNumber = it },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        OutlinedTextField(
+                                            value = editedNumber,
+                                            onValueChange = { editedNumber = it },
+                                            placeholder = { Text("Ex: 123", fontSize = 12.sp) },
+                                            trailingIcon = {
+                                                IconButton(
+                                                    onClick = {
+                                                        if (!isListeningNumber) {
+                                                            isListeningNumber = true
+                                                            com.example.util.SpeechHelper.startListening(
+                                                                context = serviceContext,
+                                                                onReady = { ToastHelper.show(serviceContext, "Fale o número...") },
+                                                                onResult = { result ->
+                                                                    isListeningNumber = false
+                                                                    val num = com.example.util.SpeechHelper.processSpokenNumber(result)
+                                                                    if (num.isNotBlank()) editedNumber = num
+                                                                },
+                                                                onError = { err ->
+                                                                    isListeningNumber = false
+                                                                    ToastHelper.show(serviceContext, err)
+                                                                }
+                                                            )
+                                                        }
+                                                    },
+                                                    modifier = Modifier.size(24.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Mic,
+                                                        contentDescription = "Falar Número",
+                                                        tint = if (isListeningNumber) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            singleLine = true
+                                        )
+                                    }
                                 }
                                 Column(modifier = Modifier.weight(1.3f)) {
                                     Text(
@@ -2916,43 +3061,49 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFF424242)
                                     )
-                                    OutlinedTextField(
-                                        value = editedComplement,
-                                        onValueChange = { editedComplement = it },
-                                        placeholder = { Text("Ex: Apto 101 Bloco B", fontSize = 12.sp) },
-                                        trailingIcon = {
-                                            IconButton(
-                                                onClick = {
-                                                    if (!isListeningComplement) {
-                                                        isListeningComplement = true
-                                                        com.example.util.SpeechHelper.startListening(
-                                                            context = serviceContext,
-                                                            onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
-                                                            onResult = { result ->
-                                                                isListeningComplement = false
-                                                                val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
-                                                                if (comp.isNotBlank()) editedComplement = comp
-                                                            },
-                                                            onError = { err ->
-                                                                isListeningComplement = false
-                                                                ToastHelper.show(serviceContext, err)
-                                                            }
-                                                        )
-                                                    }
-                                                },
-                                                modifier = Modifier.size(24.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Mic,
-                                                    contentDescription = "Falar Complemento",
-                                                    tint = if (isListeningComplement) MaterialTheme.colorScheme.primary else Color.Gray,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
+                                    com.example.ui.components.PasteSupportBox(
+                                        text = editedComplement,
+                                        onPasteText = { editedComplement = it },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        OutlinedTextField(
+                                            value = editedComplement,
+                                            onValueChange = { editedComplement = it },
+                                            placeholder = { Text("Ex: Apto 101 Bloco B", fontSize = 12.sp) },
+                                            trailingIcon = {
+                                                IconButton(
+                                                    onClick = {
+                                                        if (!isListeningComplement) {
+                                                            isListeningComplement = true
+                                                            com.example.util.SpeechHelper.startListening(
+                                                                context = serviceContext,
+                                                                onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
+                                                                onResult = { result ->
+                                                                    isListeningComplement = false
+                                                                    val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
+                                                                    if (comp.isNotBlank()) editedComplement = comp
+                                                                },
+                                                                onError = { err ->
+                                                                    isListeningComplement = false
+                                                                    ToastHelper.show(serviceContext, err)
+                                                                }
+                                                            )
+                                                        }
+                                                    },
+                                                    modifier = Modifier.size(24.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Mic,
+                                                        contentDescription = "Falar Complemento",
+                                                        tint = if (isListeningComplement) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                    }
                                 }
                             }
 
@@ -2994,43 +3145,49 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF424242)
                             )
-                            OutlinedTextField(
-                                value = editedNeighborhood,
-                                onValueChange = { editedNeighborhood = it },
-                                placeholder = { Text("Ex: Centro", fontSize = 12.sp) },
-                                trailingIcon = {
-                                    IconButton(
-                                        onClick = {
-                                            if (!isListeningNeighborhood) {
-                                                isListeningNeighborhood = true
-                                                com.example.util.SpeechHelper.startListening(
-                                                    context = serviceContext,
-                                                    onReady = { ToastHelper.show(serviceContext, "Fale o bairro...") },
-                                                    onResult = { result ->
-                                                        isListeningNeighborhood = false
-                                                        val br = com.example.util.SpeechHelper.processSpokenNeighborhood(result)
-                                                        if (br.isNotBlank()) editedNeighborhood = br
-                                                    },
-                                                    onError = { err ->
-                                                        isListeningNeighborhood = false
-                                                        ToastHelper.show(serviceContext, err)
-                                                    }
-                                                )
-                                            }
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Mic,
-                                            contentDescription = "Falar Bairro",
-                                            tint = if (isListeningNeighborhood) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
+                            com.example.ui.components.PasteSupportBox(
+                                text = editedNeighborhood,
+                                onPasteText = { editedNeighborhood = it },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = editedNeighborhood,
+                                    onValueChange = { editedNeighborhood = it },
+                                    placeholder = { Text("Ex: Centro", fontSize = 12.sp) },
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = {
+                                                if (!isListeningNeighborhood) {
+                                                    isListeningNeighborhood = true
+                                                    com.example.util.SpeechHelper.startListening(
+                                                        context = serviceContext,
+                                                        onReady = { ToastHelper.show(serviceContext, "Fale o bairro...") },
+                                                        onResult = { result ->
+                                                            isListeningNeighborhood = false
+                                                            val br = com.example.util.SpeechHelper.processSpokenNeighborhood(result)
+                                                            if (br.isNotBlank()) editedNeighborhood = br
+                                                        },
+                                                        onError = { err ->
+                                                            isListeningNeighborhood = false
+                                                            ToastHelper.show(serviceContext, err)
+                                                        }
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Mic,
+                                                contentDescription = "Falar Bairro",
+                                                tint = if (isListeningNeighborhood) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                            }
 
                             // Pré-visualização do endereço formatado
                             Surface(
@@ -3202,49 +3359,60 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF424242)
                             )
-                            OutlinedTextField(
-                                value = recipientName,
-                                onValueChange = { input ->
+                            com.example.ui.components.PasteSupportBox(
+                                text = recipientName,
+                                onPasteText = { input ->
                                     recipientName = input
                                     if (apiNameCorrectionSuggestion != null && input.trim().equals(apiNameCorrectionSuggestion!!.trim(), ignoreCase = true)) {
                                         apiNameCorrectionSuggestion = null
                                     }
                                 },
-                                placeholder = { Text("Ex: Maria da Silva", fontSize = 12.sp) },
-                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                                trailingIcon = {
-                                    IconButton(
-                                        onClick = {
-                                            if (!isListeningName) {
-                                                isListeningName = true
-                                                com.example.util.SpeechHelper.startListening(
-                                                    context = serviceContext,
-                                                    onReady = { ToastHelper.show(serviceContext, "Fale o nome...") },
-                                                    onResult = { result ->
-                                                        isListeningName = false
-                                                        val processed = com.example.util.SpeechHelper.processSpokenName(result)
-                                                        if (processed.isNotBlank()) {
-                                                            recipientName = processed
-                                                        }
-                                                    },
-                                                    onError = { err ->
-                                                        isListeningName = false
-                                                        ToastHelper.show(serviceContext, err)
-                                                    }
-                                                )
-                                            }
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = recipientName,
+                                    onValueChange = { input ->
+                                        recipientName = input
+                                        if (apiNameCorrectionSuggestion != null && input.trim().equals(apiNameCorrectionSuggestion!!.trim(), ignoreCase = true)) {
+                                            apiNameCorrectionSuggestion = null
                                         }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Mic,
-                                            contentDescription = "Falar Nome",
-                                            tint = if (isListeningName) MaterialTheme.colorScheme.primary else Color.Gray
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
+                                    },
+                                    placeholder = { Text("Ex: Maria da Silva", fontSize = 12.sp) },
+                                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = {
+                                                if (!isListeningName) {
+                                                    isListeningName = true
+                                                    com.example.util.SpeechHelper.startListening(
+                                                        context = serviceContext,
+                                                        onReady = { ToastHelper.show(serviceContext, "Fale o nome...") },
+                                                        onResult = { result ->
+                                                            isListeningName = false
+                                                            val processed = com.example.util.SpeechHelper.processSpokenName(result)
+                                                            if (processed.isNotBlank()) {
+                                                                recipientName = processed
+                                                            }
+                                                        },
+                                                        onError = { err ->
+                                                            isListeningName = false
+                                                            ToastHelper.show(serviceContext, err)
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Mic,
+                                                contentDescription = "Falar Nome",
+                                                tint = if (isListeningName) MaterialTheme.colorScheme.primary else Color.Gray
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                            }
 
                             if (apiNameCorrectionSuggestion != null) {
                                 val officialName = apiNameCorrectionSuggestion!!
@@ -3350,81 +3518,135 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             com.example.ui.components.CpfApiQuotaCard()
 
                             // Documento do Recebedor (numérico)
-                            Text(
-                                text = "Documento do Recebedor (CPF / RG):",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF424242)
-                            )
-                            val isDocValidState = remember(recipientDocument) {
-                                if (recipientDocument.isBlank()) null else com.example.util.SpeechHelper.isValidDocument(recipientDocument)
+                            val docClassification = remember(recipientDocument) {
+                                com.example.util.SpeechHelper.classifyDocument(recipientDocument)
+                            }
+                            val isDocValidState = docClassification.isValid
+
+                            // Documento do Recebedor (numérico)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Documento do Recebedor:",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF424242)
+                                )
+                                if (docClassification.type != null) {
+                                    Surface(
+                                        color = when (docClassification.type) {
+                                            com.example.util.SpeechHelper.DocumentType.CPF -> Color(0xFFE8F5E9)
+                                            com.example.util.SpeechHelper.DocumentType.RG -> Color(0xFFE3F2FD)
+                                            com.example.util.SpeechHelper.DocumentType.CNPJ -> Color(0xFFFFF3E0)
+                                            else -> Color(0xFFF5F5F5)
+                                        },
+                                        shape = RoundedCornerShape(4.dp),
+                                        border = BorderStroke(1.dp, when (docClassification.type) {
+                                            com.example.util.SpeechHelper.DocumentType.CPF -> Color(0xFF4CAF50)
+                                            com.example.util.SpeechHelper.DocumentType.RG -> Color(0xFF2196F3)
+                                            com.example.util.SpeechHelper.DocumentType.CNPJ -> Color(0xFFFF9800)
+                                            else -> Color(0xFF9E9E9E)
+                                        })
+                                    ) {
+                                        Text(
+                                            text = docClassification.type.label,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = when (docClassification.type) {
+                                                com.example.util.SpeechHelper.DocumentType.CPF -> Color(0xFF2E7D32)
+                                                com.example.util.SpeechHelper.DocumentType.RG -> Color(0xFF1565C0)
+                                                com.example.util.SpeechHelper.DocumentType.CNPJ -> Color(0xFFE65100)
+                                                else -> Color(0xFF616161)
+                                            },
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        text = "(CPF / RG / CNPJ)",
+                                        fontSize = 10.sp,
+                                        color = Color(0xFF757575)
+                                    )
+                                }
                             }
 
-                            OutlinedTextField(
-                                value = recipientDocument,
-                                onValueChange = { input ->
+                            com.example.ui.components.PasteSupportBox(
+                                text = recipientDocument,
+                                onPasteText = { input ->
                                     val filtered = input.filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '/' || it == ' ' }.uppercase(java.util.Locale.ROOT)
                                     recipientDocument = filtered
-                                    val digits = filtered.filter { it.isDigit() }
-                                    // Prioridade máxima da API: pesquisa automaticamente assim que atinge 11 dígitos de CPF
-                                    if (digits.length == 11 && digits != lastAutoLookedUpCpf) {
-                                        performCpfLookup(digits)
-                                    } else if (filtered.any { it.isLetter() } && filtered.length >= 6 && filtered != lastAutoLookedUpCpf) {
-                                        // Documento com letras (ex: RG com sigla estadual MG-12345678)
-                                        performCpfLookup(filtered)
-                                    }
                                 },
-                                placeholder = { Text("Ex: 123.456.789-00 ou RG", fontSize = 12.sp) },
-                                keyboardOptions = KeyboardOptions(
-                                    capitalization = KeyboardCapitalization.Characters,
-                                    keyboardType = KeyboardType.Text
-                                ),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = when (isDocValidState) {
-                                        true -> Color(0xFF2E7D32)
-                                        false -> Color(0xFFD32F2F)
-                                        null -> MaterialTheme.colorScheme.primary
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = recipientDocument,
+                                    onValueChange = { input ->
+                                        val filtered = input.filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '/' || it == ' ' }.uppercase(java.util.Locale.ROOT)
+                                        recipientDocument = filtered
                                     },
-                                    unfocusedBorderColor = when (isDocValidState) {
-                                        true -> Color(0xFF4CAF50)
-                                        false -> Color(0xFFE53935)
-                                        null -> MaterialTheme.colorScheme.outline
-                                    }
-                                ),
-                                supportingText = {
-                                    if (cpfLookupMessage != null) {
-                                        Text(
-                                            text = cpfLookupMessage!!,
-                                            color = if (cpfLookupMessage!!.startsWith("✓")) Color(0xFF2E7D32) else Color(0xFFD32F2F),
-                                            fontSize = 10.5.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    } else {
-                                        val formDocDigits = recipientDocument.filter { it.isDigit() }
-                                        if (formDocDigits.length == 11 && verifiedCpfsMap.containsKey(formDocDigits)) {
-                                            Text("✓ CPF verificado e validado na base oficial da API", color = Color(0xFF2E7D32), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
-                                        } else {
-                                            when (isDocValidState) {
-                                                true -> Text("Documento válido", color = Color(0xFF2E7D32), fontSize = 11.sp)
-                                                false -> Text("Documento inválido", color = Color(0xFFD32F2F), fontSize = 11.sp)
-                                                null -> null
-                                            }
+                                    placeholder = { Text("Ex: 123.456.789-00 ou RG", fontSize = 12.sp) },
+                                    keyboardOptions = KeyboardOptions(
+                                        capitalization = KeyboardCapitalization.Characters,
+                                        keyboardType = KeyboardType.Text
+                                    ),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = when (isDocValidState) {
+                                            true -> Color(0xFF2E7D32)
+                                            false -> Color(0xFFD32F2F)
+                                            null -> MaterialTheme.colorScheme.primary
+                                        },
+                                        unfocusedBorderColor = when (isDocValidState) {
+                                            true -> Color(0xFF4CAF50)
+                                            false -> Color(0xFFE53935)
+                                            null -> MaterialTheme.colorScheme.outline
                                         }
-                                    }
-                                },
-                                trailingIcon = {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (isLookingUpCpfOnline) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(18.dp).padding(end = 4.dp),
-                                                strokeWidth = 2.dp,
-                                                color = MaterialTheme.colorScheme.primary
+                                    ),
+                                    supportingText = {
+                                        if (cpfLookupMessage != null) {
+                                            Text(
+                                                text = cpfLookupMessage!!,
+                                                color = if (cpfLookupMessage!!.startsWith("✓")) Color(0xFF2E7D32) else Color(0xFFD32F2F),
+                                                fontSize = 10.5.sp,
+                                                fontWeight = FontWeight.SemiBold
                                             )
                                         } else {
-                                            val digits = recipientDocument.filter { it.isDigit() }
-                                            if (digits.length == 11 || recipientDocument.trim().length >= 5) {
+                                            val formDocDigits = recipientDocument.filter { it.isDigit() }
+                                            if (formDocDigits.length == 11 && verifiedCpfsMap.containsKey(formDocDigits)) {
+                                                Text("✓ CPF verificado e validado na base oficial da API", color = Color(0xFF2E7D32), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                                            } else if (recipientDocument.isNotBlank()) {
+                                                Text(
+                                                    text = docClassification.description,
+                                                    color = when (docClassification.isValid) {
+                                                        true -> Color(0xFF2E7D32)
+                                                        false -> Color(0xFFD32F2F)
+                                                        null -> Color(0xFF757575)
+                                                    },
+                                                    fontSize = 10.5.sp,
+                                                    fontWeight = if (docClassification.isValid != null) FontWeight.SemiBold else FontWeight.Normal
+                                                )
+                                            }
+                                        }
+                                    },
+                                    trailingIcon = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (isLookingUpCpfOnline) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(18.dp).padding(end = 4.dp),
+                                                    strokeWidth = 2.dp,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            } else {
                                                 IconButton(
-                                                    onClick = { performCpfLookup(recipientDocument) },
+                                                    onClick = {
+                                                        val raw = recipientDocument.trim()
+                                                        if (raw.isNotBlank()) {
+                                                            performCpfLookup(raw)
+                                                        } else {
+                                                            ToastHelper.show(serviceContext, "Informe o documento para pesquisar")
+                                                        }
+                                                    },
                                                     modifier = Modifier.size(32.dp)
                                                 ) {
                                                     Icon(
@@ -3435,47 +3657,43 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     )
                                                 }
                                             }
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                if (!isListeningDoc) {
-                                                    isListeningDoc = true
-                                                    com.example.util.SpeechHelper.startListening(
-                                                        context = serviceContext,
-                                                        onReady = { ToastHelper.show(serviceContext, "Fale os números do documento...") },
-                                                        onResult = { result ->
-                                                            isListeningDoc = false
-                                                            val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
-                                                            if (processed.isNotBlank()) {
-                                                                val upper = processed.uppercase(java.util.Locale.ROOT)
-                                                                recipientDocument = upper
-                                                                val digits = upper.filter { it.isDigit() }
-                                                                if (digits.length == 11 && digits != lastAutoLookedUpCpf) {
-                                                                    performCpfLookup(digits)
+                                            IconButton(
+                                                onClick = {
+                                                    if (!isListeningDoc) {
+                                                        isListeningDoc = true
+                                                        com.example.util.SpeechHelper.startListening(
+                                                            context = serviceContext,
+                                                            onReady = { ToastHelper.show(serviceContext, "Fale os números do documento...") },
+                                                            onResult = { result ->
+                                                                isListeningDoc = false
+                                                                val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
+                                                                if (processed.isNotBlank()) {
+                                                                    val upper = processed.uppercase(java.util.Locale.ROOT)
+                                                                    recipientDocument = upper
                                                                 }
+                                                            },
+                                                            onError = { err ->
+                                                                isListeningDoc = false
+                                                                ToastHelper.show(serviceContext, err)
                                                             }
-                                                        },
-                                                        onError = { err ->
-                                                            isListeningDoc = false
-                                                            ToastHelper.show(serviceContext, err)
-                                                        }
-                                                    )
-                                                }
-                                            },
-                                            modifier = Modifier.size(32.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Mic,
-                                                contentDescription = "Falar Documento",
-                                                tint = if (isListeningDoc) MaterialTheme.colorScheme.primary else Color.Gray,
-                                                modifier = Modifier.size(18.dp)
-                                            )
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Mic,
+                                                    contentDescription = "Falar Documento",
+                                                    tint = if (isListeningDoc) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
                                         }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                            }
 
                             // Complemento do Morador neste endereço (Apto, Bloco, Casa...)
                             Column(
@@ -3508,43 +3726,49 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         }
                                     }
                                 }
-                                OutlinedTextField(
-                                    value = editedComplement,
-                                    onValueChange = { editedComplement = it },
-                                    placeholder = { Text("Ex: Apto 101, Bloco B, Fundos", fontSize = 12.sp) },
-                                    trailingIcon = {
-                                        IconButton(
-                                            onClick = {
-                                                if (!isListeningComplement) {
-                                                    isListeningComplement = true
-                                                    com.example.util.SpeechHelper.startListening(
-                                                        context = serviceContext,
-                                                        onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
-                                                        onResult = { result ->
-                                                            isListeningComplement = false
-                                                            val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
-                                                            if (comp.isNotBlank()) editedComplement = comp
-                                                        },
-                                                        onError = { err ->
-                                                            isListeningComplement = false
-                                                            ToastHelper.show(serviceContext, err)
-                                                        }
-                                                    )
-                                                }
-                                            },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Mic,
-                                                contentDescription = "Falar Complemento",
-                                                tint = if (isListeningComplement) MaterialTheme.colorScheme.primary else Color.Gray,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true
-                                )
+                                com.example.ui.components.PasteSupportBox(
+                                    text = editedComplement,
+                                    onPasteText = { editedComplement = it },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    OutlinedTextField(
+                                        value = editedComplement,
+                                        onValueChange = { editedComplement = it },
+                                        placeholder = { Text("Ex: Apto 101, Bloco B, Fundos", fontSize = 12.sp) },
+                                        trailingIcon = {
+                                            IconButton(
+                                                onClick = {
+                                                    if (!isListeningComplement) {
+                                                        isListeningComplement = true
+                                                        com.example.util.SpeechHelper.startListening(
+                                                            context = serviceContext,
+                                                            onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
+                                                            onResult = { result ->
+                                                                isListeningComplement = false
+                                                                val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
+                                                                if (comp.isNotBlank()) editedComplement = comp
+                                                            },
+                                                            onError = { err ->
+                                                                isListeningComplement = false
+                                                                ToastHelper.show(serviceContext, err)
+                                                            }
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Mic,
+                                                    contentDescription = "Falar Complemento",
+                                                    tint = if (isListeningComplement) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+                                }
                                 val knownComps = automationState.candidatePersons
                                     .map { it.complemento.trim() }
                                     .filter { it.isNotBlank() }
@@ -4519,13 +4743,19 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                                     overflow = TextOverflow.Ellipsis
                                                 )
                                             }
-                                            Spacer(modifier = Modifier.height(2.dp))
                                             val rDocDigits = r.documento.filter { it.isDigit() }
                                             val rIsCpf = rDocDigits.length == 11
                                             val rIsVerified = rIsCpf && verifiedCpfsMap.containsKey(rDocDigits)
+                                            val rClassified = com.example.util.SpeechHelper.classifyDocument(r.documento)
+                                            val rDocPrefix = when (rClassified.type) {
+                                                com.example.util.SpeechHelper.DocumentType.CPF -> "CPF"
+                                                com.example.util.SpeechHelper.DocumentType.RG -> "RG"
+                                                com.example.util.SpeechHelper.DocumentType.CNPJ -> "CNPJ"
+                                                else -> if (rIsCpf) "CPF" else "Doc"
+                                            }
                                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                                 Text(
-                                                    text = if (r.documento.isNotBlank()) (if (rIsCpf) "CPF: ${r.documento}" else "Doc: ${r.documento}") else "Sem documento",
+                                                    text = if (r.documento.isNotBlank()) "$rDocPrefix: ${r.documento}" else "Sem documento",
                                                     fontSize = 10.5.sp,
                                                     color = Color(0xFF757575)
                                                 )
@@ -5398,25 +5628,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             val activeRecPersonId = activeRec.id.removePrefix("p_").substringBefore("_").toLongOrNull()
                                             val activeRecPerson = if (activeRecPersonId != null) automationState.candidatePersons.firstOrNull { it.id == activeRecPersonId } else automationState.matchedPerson
-                                            val activeComp = activeRecPerson?.complemento?.trim().orEmpty()
 
-                                            IconButton(
-                                                onClick = {
-                                                    val targetP = activeRecPerson ?: automationState.matchedPerson
-                                                    receiverToChangeComplement = Pair(activeRec, targetP)
-                                                    targetNewComplementInput = activeComp
-                                                    showChangeComplementDialog = true
-                                                    updateWindowLayoutMode(OverlayMode.MODAL)
-                                                },
-                                                modifier = Modifier.size(24.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Home,
-                                                    contentDescription = "Mudar Complemento deste Morador",
-                                                    tint = Color(0xFF6A1B9A),
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                            }
                                             IconButton(
                                                 onClick = { openEditForReceiver(activeRec, activeRecPerson ?: automationState.matchedPerson, "RESIDENT", false) },
                                                 modifier = Modifier.size(24.dp)
@@ -5498,13 +5710,21 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                         val isCpfDoc = activeDocDigits.length == 11
                                         val isCpfVerified = isCpfDoc && verifiedCpfsMap.containsKey(activeDocDigits)
 
+                                        val activeClassified = com.example.util.SpeechHelper.classifyDocument(activeRec.documento)
+                                        val activeDocPrefix = when (activeClassified.type) {
+                                            com.example.util.SpeechHelper.DocumentType.CPF -> "CPF"
+                                            com.example.util.SpeechHelper.DocumentType.RG -> "RG"
+                                            com.example.util.SpeechHelper.DocumentType.CNPJ -> "CNPJ"
+                                            else -> if (isCpfDoc) "CPF" else "Doc"
+                                        }
+
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
                                             Text(
-                                                text = if (isCpfDoc) "CPF: ${activeRec.documento}" else "Doc: ${activeRec.documento}",
+                                                text = "$activeDocPrefix: ${activeRec.documento}",
                                                 fontSize = 11.sp,
                                                 color = Color(0xFF37474F),
                                                 fontWeight = FontWeight.Medium
@@ -6009,63 +6229,99 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
 
             // DIÁLOGO DE MOVER / COPIAR MORADOR (Exibido no topo de qualquer modal ou painel)
             if (showMoveOrCopyDialog) {
-                val moveOrCopySearchResults by remember(moveOrCopySearchQuery) {
-                    if (moveOrCopySearchQuery.isBlank()) {
-                        DeliveryApp.instance.personRepository.getAllPersons()
-                    } else {
-                        DeliveryApp.instance.personRepository.searchPersons(moveOrCopySearchQuery)
-                    }
-                }.collectAsState(initial = emptyList())
+                var distinctTargetSuggestions by remember { mutableStateOf<List<Person>>(emptyList()) }
 
-                val distinctTargetSuggestions = remember(moveOrCopySearchResults) {
-                    moveOrCopySearchResults.distinctBy {
-                        "${AddressNormalizer.normalize(it.endereco)}_${AddressNormalizer.normalize(it.numero)}_${AddressNormalizer.normalize(it.complemento)}"
-                    }.take(5)
+                LaunchedEffect(moveOrCopySearchQuery) {
+                    val q = moveOrCopySearchQuery.trim()
+                    if (q.length < 2) {
+                        distinctTargetSuggestions = emptyList()
+                        return@LaunchedEffect
+                    }
+                    delay(180)
+                    val results = try {
+                        DeliveryApp.instance.personRepository.fuzzySearchForBubble(q, maxResults = 15).items
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                    val topSuggestions = withContext(Dispatchers.Default) {
+                        val seenKeys = HashSet<String>(8)
+                        val picked = ArrayList<Person>(5)
+                        for (item in results) {
+                            val key = "${AddressNormalizer.normalize(item.endereco)}_${AddressNormalizer.normalize(item.numero)}_${AddressNormalizer.normalize(item.complemento)}"
+                            if (seenKeys.add(key)) {
+                                picked.add(item)
+                                if (picked.size >= 5) break
+                            }
+                        }
+                        picked
+                    }
+                    distinctTargetSuggestions = topSuggestions
+                }
+
+                val closeMoveOrCopyModal: (closeEdit: Boolean) -> Unit = { closeEdit ->
+                    showMoveOrCopyDialog = false
+                    moveOrCopyTargetReceiver = null
+                    moveOrCopySourcePerson = null
+                    if (closeEdit) {
+                        isEditModalOpen = false
+                    }
+                    val hasOtherModal = isEditModalOpen || isSearchModalOpen || isMultipleRecipientsModalOpen || showAddComplementDialog || showDeleteReceiverConfirmDialog || showChangeComplementDialog
+                    if (!hasOtherModal) {
+                        updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
+                    }
                 }
 
                 val onConfirmMoveOrCopy: () -> Unit = onConfirm@{
+                    if (isExecutingMoveOrCopy) return@onConfirm
                     if (moveOrCopyTargetStreet.trim().isBlank()) {
                         moveOrCopyStreetError = true
                         ToastHelper.show(serviceContext, "Informe o endereço de destino!")
                         return@onConfirm
                     }
                     val rec = moveOrCopyTargetReceiver ?: return@onConfirm
+                    val sourceP = moveOrCopySourcePerson
+                    val isMove = isMoveAction
+                    val targetSt = moveOrCopyTargetStreet.trim()
+                    val targetNum = moveOrCopyTargetNumber.trim()
+                    val targetComp = moveOrCopyTargetComplement.trim()
+                    val targetBr = moveOrCopyTargetBairro.trim()
                     isExecutingMoveOrCopy = true
 
                     serviceScope.launch(Dispatchers.IO) {
                         try {
                             val success = DeliveryApp.instance.personRepository.moveOrCopyReceiver(
-                                sourcePerson = moveOrCopySourcePerson,
+                                sourcePerson = sourceP,
                                 receiver = rec,
-                                isMove = isMoveAction,
-                                targetAddress = moveOrCopyTargetStreet.trim(),
-                                targetNumber = moveOrCopyTargetNumber.trim(),
-                                targetComplement = moveOrCopyTargetComplement.trim(),
-                                targetBairro = moveOrCopyTargetBairro.trim()
+                                isMove = isMove,
+                                targetAddress = targetSt,
+                                targetNumber = targetNum,
+                                targetComplement = targetComp,
+                                targetBairro = targetBr
                             )
 
                             withContext(Dispatchers.Main) {
                                 isExecutingMoveOrCopy = false
-                                showMoveOrCopyDialog = false
-                                val actionName = if (isMoveAction) "movido" else "copiado"
+                                val actionName = if (isMove) "movido" else "copiado"
                                 if (success) {
-                                    FeedbackHelper.triggerSuccess(serviceContext)
+                                    triggerSuccessFeedback()
                                     ToastHelper.show(serviceContext, "Morador $actionName com sucesso!")
+                                    closeMoveOrCopyModal(isMove)
 
-                                    if (isMoveAction) {
-                                        isEditModalOpen = false
+                                    val stillHasModal = isEditModalOpen || isSearchModalOpen || isMultipleRecipientsModalOpen || showAddComplementDialog || showDeleteReceiverConfirmDialog || showChangeComplementDialog
+                                    if (stillHasModal) {
+                                        AccessibilityAutomationEngine.refreshCurrentAddress()
+                                    } else {
+                                        AccessibilityAutomationEngine.rescanCurrentScreen(forceUnlock = true)
                                     }
-
-                                    AccessibilityAutomationEngine.rescanCurrentScreen(forceUnlock = true)
-                                    updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
                                 } else {
+                                    closeMoveOrCopyModal(false)
                                     ToastHelper.show(serviceContext, "Erro ao realizar operação.")
                                 }
                             }
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             withContext(Dispatchers.Main) {
                                 isExecutingMoveOrCopy = false
-                                ToastHelper.show(serviceContext, "Erro: ${e.message}")
+                                ToastHelper.show(serviceContext, "Erro: ${e.message ?: "Falha na operação"}")
                             }
                         }
                     }
@@ -6119,9 +6375,8 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 }
                                 IconButton(
                                     onClick = {
-                                        showMoveOrCopyDialog = false
-                                        if (!isEditModalOpen && !isSearchModalOpen && !isMultipleRecipientsModalOpen) {
-                                            updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
+                                        if (!isExecutingMoveOrCopy) {
+                                            closeMoveOrCopyModal(false)
                                         }
                                     },
                                     modifier = Modifier.size(28.dp)
@@ -6256,23 +6511,29 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             )
 
                             // Campo de Busca Rápida de Endereços Salvos
-                            OutlinedTextField(
-                                value = moveOrCopySearchQuery,
-                                onValueChange = { moveOrCopySearchQuery = it },
-                                placeholder = { Text("Buscar endereço existente...", fontSize = 11.5.sp) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(18.dp))
-                                },
-                                trailingIcon = {
-                                    if (moveOrCopySearchQuery.isNotBlank()) {
-                                        IconButton(onClick = { moveOrCopySearchQuery = "" }, modifier = Modifier.size(24.dp)) {
-                                            Icon(Icons.Default.Close, contentDescription = "Limpar", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                            com.example.ui.components.PasteSupportBox(
+                                text = moveOrCopySearchQuery,
+                                onPasteText = { moveOrCopySearchQuery = it },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = moveOrCopySearchQuery,
+                                    onValueChange = { moveOrCopySearchQuery = it },
+                                    placeholder = { Text("Buscar endereço existente...", fontSize = 11.5.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(18.dp))
+                                    },
+                                    trailingIcon = {
+                                        if (moveOrCopySearchQuery.isNotBlank()) {
+                                            IconButton(onClick = { moveOrCopySearchQuery = "" }, modifier = Modifier.size(24.dp)) {
+                                                Icon(Icons.Default.Close, contentDescription = "Limpar", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                                            }
                                         }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                            }
 
                             // Lista rápida de sugestões de endereços existentes
                             if (distinctTargetSuggestions.isNotEmpty() && moveOrCopySearchQuery.isNotBlank()) {
@@ -6338,46 +6599,55 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 fontWeight = FontWeight.Bold,
                                 color = if (moveOrCopyStreetError) Color(0xFFD32F2F) else Color(0xFF424242)
                             )
-                            OutlinedTextField(
-                                value = moveOrCopyTargetStreet,
-                                onValueChange = {
+                            com.example.ui.components.PasteSupportBox(
+                                text = moveOrCopyTargetStreet,
+                                onPasteText = {
                                     moveOrCopyTargetStreet = it
                                     if (it.isNotBlank()) moveOrCopyStreetError = false
                                 },
-                                isError = moveOrCopyStreetError,
-                                placeholder = { Text("Ex: Rua das Flores", fontSize = 12.sp) },
-                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                                trailingIcon = {
-                                    IconButton(
-                                        onClick = {
-                                            if (!isListeningMoveStreet) {
-                                                isListeningMoveStreet = true
-                                                com.example.util.SpeechHelper.startListening(
-                                                    context = serviceContext,
-                                                    onReady = { ToastHelper.show(serviceContext, "Fale o endereço...") },
-                                                    onResult = { result ->
-                                                        isListeningMoveStreet = false
-                                                        val parsed = AddressNormalizer.parseAddressComponents(result)
-                                                        moveOrCopyTargetStreet = parsed.street.ifBlank { com.example.util.SpeechHelper.processSpokenStreet(result) }
-                                                        if (parsed.number.isNotBlank()) moveOrCopyTargetNumber = parsed.number
-                                                        if (parsed.complement.isNotBlank()) moveOrCopyTargetComplement = parsed.complement
-                                                        if (parsed.neighborhood.isNotBlank()) moveOrCopyTargetBairro = parsed.neighborhood
-                                                        moveOrCopyStreetError = false
-                                                    },
-                                                    onError = { err ->
-                                                        isListeningMoveStreet = false
-                                                        ToastHelper.show(serviceContext, err)
-                                                    }
-                                                )
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = moveOrCopyTargetStreet,
+                                    onValueChange = {
+                                        moveOrCopyTargetStreet = it
+                                        if (it.isNotBlank()) moveOrCopyStreetError = false
+                                    },
+                                    isError = moveOrCopyStreetError,
+                                    placeholder = { Text("Ex: Rua das Flores", fontSize = 12.sp) },
+                                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = {
+                                                if (!isListeningMoveStreet) {
+                                                    isListeningMoveStreet = true
+                                                    com.example.util.SpeechHelper.startListening(
+                                                        context = serviceContext,
+                                                        onReady = { ToastHelper.show(serviceContext, "Fale o endereço...") },
+                                                        onResult = { result ->
+                                                            isListeningMoveStreet = false
+                                                            val parsed = AddressNormalizer.parseAddressComponents(result)
+                                                            moveOrCopyTargetStreet = parsed.street.ifBlank { com.example.util.SpeechHelper.processSpokenStreet(result) }
+                                                            if (parsed.number.isNotBlank()) moveOrCopyTargetNumber = parsed.number
+                                                            if (parsed.complement.isNotBlank()) moveOrCopyTargetComplement = parsed.complement
+                                                            if (parsed.neighborhood.isNotBlank()) moveOrCopyTargetBairro = parsed.neighborhood
+                                                            moveOrCopyStreetError = false
+                                                        },
+                                                        onError = { err ->
+                                                            isListeningMoveStreet = false
+                                                            ToastHelper.show(serviceContext, err)
+                                                        }
+                                                    )
+                                                }
                                             }
+                                        ) {
+                                            Icon(Icons.Default.Mic, contentDescription = "Falar Rua", tint = if (isListeningMoveStreet) MaterialTheme.colorScheme.primary else Color.Gray)
                                         }
-                                    ) {
-                                        Icon(Icons.Default.Mic, contentDescription = "Falar Rua", tint = if (isListeningMoveStreet) MaterialTheme.colorScheme.primary else Color.Gray)
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                            }
 
                             // Número e Complemento
                             Row(
@@ -6386,111 +6656,129 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(text = "Número:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF424242))
-                                    OutlinedTextField(
-                                        value = moveOrCopyTargetNumber,
-                                        onValueChange = { moveOrCopyTargetNumber = it },
-                                        placeholder = { Text("Ex: 120", fontSize = 12.sp) },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                                        trailingIcon = {
-                                            IconButton(
-                                                onClick = {
-                                                    if (!isListeningMoveNumber) {
-                                                        isListeningMoveNumber = true
-                                                        com.example.util.SpeechHelper.startListening(
-                                                            context = serviceContext,
-                                                            onReady = { ToastHelper.show(serviceContext, "Fale o número...") },
-                                                            onResult = { result ->
-                                                                isListeningMoveNumber = false
-                                                                val num = com.example.util.SpeechHelper.processSpokenNumber(result)
-                                                                moveOrCopyTargetNumber = if (num.isNotBlank()) num else result
-                                                            },
-                                                            onError = { err ->
-                                                                isListeningMoveNumber = false
-                                                                ToastHelper.show(serviceContext, err)
-                                                            }
-                                                        )
+                                    com.example.ui.components.PasteSupportBox(
+                                        text = moveOrCopyTargetNumber,
+                                        onPasteText = { moveOrCopyTargetNumber = it },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        OutlinedTextField(
+                                            value = moveOrCopyTargetNumber,
+                                            onValueChange = { moveOrCopyTargetNumber = it },
+                                            placeholder = { Text("Ex: 120", fontSize = 12.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                                            trailingIcon = {
+                                                IconButton(
+                                                    onClick = {
+                                                        if (!isListeningMoveNumber) {
+                                                            isListeningMoveNumber = true
+                                                            com.example.util.SpeechHelper.startListening(
+                                                                context = serviceContext,
+                                                                onReady = { ToastHelper.show(serviceContext, "Fale o número...") },
+                                                                onResult = { result ->
+                                                                    isListeningMoveNumber = false
+                                                                    val num = com.example.util.SpeechHelper.processSpokenNumber(result)
+                                                                    moveOrCopyTargetNumber = if (num.isNotBlank()) num else result
+                                                                },
+                                                                onError = { err ->
+                                                                    isListeningMoveNumber = false
+                                                                    ToastHelper.show(serviceContext, err)
+                                                                }
+                                                            )
+                                                        }
                                                     }
+                                                ) {
+                                                    Icon(Icons.Default.Mic, contentDescription = "Falar Número", tint = if (isListeningMoveNumber) MaterialTheme.colorScheme.primary else Color.Gray, modifier = Modifier.size(18.dp))
                                                 }
-                                            ) {
-                                                Icon(Icons.Default.Mic, contentDescription = "Falar Número", tint = if (isListeningMoveNumber) MaterialTheme.colorScheme.primary else Color.Gray, modifier = Modifier.size(18.dp))
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                    }
                                 }
 
                                 Column(modifier = Modifier.weight(1.2f)) {
                                     Text(text = "Complemento:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF424242))
-                                    OutlinedTextField(
-                                        value = moveOrCopyTargetComplement,
-                                        onValueChange = { moveOrCopyTargetComplement = it },
-                                        placeholder = { Text("Ex: Apto 101", fontSize = 12.sp) },
-                                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                                        trailingIcon = {
-                                            IconButton(
-                                                onClick = {
-                                                    if (!isListeningMoveComp) {
-                                                        isListeningMoveComp = true
-                                                        com.example.util.SpeechHelper.startListening(
-                                                            context = serviceContext,
-                                                            onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
-                                                            onResult = { result ->
-                                                                isListeningMoveComp = false
-                                                                val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
-                                                                moveOrCopyTargetComplement = if (comp.isNotBlank()) comp else result
-                                                            },
-                                                            onError = { err ->
-                                                                isListeningMoveComp = false
-                                                                ToastHelper.show(serviceContext, err)
-                                                            }
-                                                        )
+                                    com.example.ui.components.PasteSupportBox(
+                                        text = moveOrCopyTargetComplement,
+                                        onPasteText = { moveOrCopyTargetComplement = it },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        OutlinedTextField(
+                                            value = moveOrCopyTargetComplement,
+                                            onValueChange = { moveOrCopyTargetComplement = it },
+                                            placeholder = { Text("Ex: Apto 101", fontSize = 12.sp) },
+                                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                                            trailingIcon = {
+                                                IconButton(
+                                                    onClick = {
+                                                        if (!isListeningMoveComp) {
+                                                            isListeningMoveComp = true
+                                                            com.example.util.SpeechHelper.startListening(
+                                                                context = serviceContext,
+                                                                onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
+                                                                onResult = { result ->
+                                                                    isListeningMoveComp = false
+                                                                    val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
+                                                                    moveOrCopyTargetComplement = if (comp.isNotBlank()) comp else result
+                                                                },
+                                                                onError = { err ->
+                                                                    isListeningMoveComp = false
+                                                                    ToastHelper.show(serviceContext, err)
+                                                                }
+                                                            )
+                                                        }
                                                     }
+                                                ) {
+                                                    Icon(Icons.Default.Mic, contentDescription = "Falar Complemento", tint = if (isListeningMoveComp) MaterialTheme.colorScheme.primary else Color.Gray, modifier = Modifier.size(18.dp))
                                                 }
-                                            ) {
-                                                Icon(Icons.Default.Mic, contentDescription = "Falar Complemento", tint = if (isListeningMoveComp) MaterialTheme.colorScheme.primary else Color.Gray, modifier = Modifier.size(18.dp))
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                    }
                                 }
                             }
 
                             // Bairro
                             Text(text = "Bairro:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF424242))
-                            OutlinedTextField(
-                                value = moveOrCopyTargetBairro,
-                                onValueChange = { moveOrCopyTargetBairro = it },
-                                placeholder = { Text("Ex: Centro", fontSize = 12.sp) },
-                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                                trailingIcon = {
-                                    IconButton(
-                                        onClick = {
-                                            if (!isListeningMoveBairro) {
-                                                isListeningMoveBairro = true
-                                                com.example.util.SpeechHelper.startListening(
-                                                    context = serviceContext,
-                                                    onReady = { ToastHelper.show(serviceContext, "Fale o bairro...") },
-                                                    onResult = { result ->
-                                                        isListeningMoveBairro = false
-                                                        val br = com.example.util.SpeechHelper.processSpokenNeighborhood(result)
-                                                        moveOrCopyTargetBairro = if (br.isNotBlank()) br else result
-                                                    },
-                                                    onError = { err ->
-                                                        isListeningMoveBairro = false
-                                                        ToastHelper.show(serviceContext, err)
-                                                    }
-                                                )
+                            com.example.ui.components.PasteSupportBox(
+                                text = moveOrCopyTargetBairro,
+                                onPasteText = { moveOrCopyTargetBairro = it },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = moveOrCopyTargetBairro,
+                                    onValueChange = { moveOrCopyTargetBairro = it },
+                                    placeholder = { Text("Ex: Centro", fontSize = 12.sp) },
+                                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = {
+                                                if (!isListeningMoveBairro) {
+                                                    isListeningMoveBairro = true
+                                                    com.example.util.SpeechHelper.startListening(
+                                                        context = serviceContext,
+                                                        onReady = { ToastHelper.show(serviceContext, "Fale o bairro...") },
+                                                        onResult = { result ->
+                                                            isListeningMoveBairro = false
+                                                            val br = com.example.util.SpeechHelper.processSpokenNeighborhood(result)
+                                                            moveOrCopyTargetBairro = if (br.isNotBlank()) br else result
+                                                        },
+                                                        onError = { err ->
+                                                            isListeningMoveBairro = false
+                                                            ToastHelper.show(serviceContext, err)
+                                                        }
+                                                    )
+                                                }
                                             }
+                                        ) {
+                                            Icon(Icons.Default.Mic, contentDescription = "Falar Bairro", tint = if (isListeningMoveBairro) MaterialTheme.colorScheme.primary else Color.Gray, modifier = Modifier.size(18.dp))
                                         }
-                                    ) {
-                                        Icon(Icons.Default.Mic, contentDescription = "Falar Bairro", tint = if (isListeningMoveBairro) MaterialTheme.colorScheme.primary else Color.Gray, modifier = Modifier.size(18.dp))
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                            }
 
                             Spacer(modifier = Modifier.height(4.dp))
 
@@ -6501,11 +6789,11 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                             ) {
                                 OutlinedButton(
                                     onClick = {
-                                        showMoveOrCopyDialog = false
-                                        if (!isEditModalOpen && !isSearchModalOpen && !isMultipleRecipientsModalOpen) {
-                                            updateWindowLayoutMode(if (isExpanded) OverlayMode.PANEL else OverlayMode.BUBBLE)
+                                        if (!isExecutingMoveOrCopy) {
+                                            closeMoveOrCopyModal(false)
                                         }
                                     },
+                                    enabled = !isExecutingMoveOrCopy,
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(42.dp),
@@ -6629,42 +6917,48 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 color = Color(0xFF424242)
                             )
 
-                            OutlinedTextField(
-                                value = newComplementInput,
-                                onValueChange = { newComplementInput = it },
-                                placeholder = { Text("Ex: Apto 101, Bloco B, Fundos", fontSize = 12.sp) },
-                                trailingIcon = {
-                                    IconButton(
-                                        onClick = {
-                                            if (!isListeningNewComp) {
-                                                isListeningNewComp = true
-                                                com.example.util.SpeechHelper.startListening(
-                                                    context = serviceContext,
-                                                    onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
-                                                    onResult = { result ->
-                                                        isListeningNewComp = false
-                                                        val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
-                                                        newComplementInput = if (comp.isNotBlank()) comp else result
-                                                    },
-                                                    onError = { err ->
-                                                        isListeningNewComp = false
-                                                        ToastHelper.show(serviceContext, err)
-                                                    }
-                                                )
+                            com.example.ui.components.PasteSupportBox(
+                                text = newComplementInput,
+                                onPasteText = { newComplementInput = it },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = newComplementInput,
+                                    onValueChange = { newComplementInput = it },
+                                    placeholder = { Text("Ex: Apto 101, Bloco B, Fundos", fontSize = 12.sp) },
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = {
+                                                if (!isListeningNewComp) {
+                                                    isListeningNewComp = true
+                                                    com.example.util.SpeechHelper.startListening(
+                                                        context = serviceContext,
+                                                        onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
+                                                        onResult = { result ->
+                                                            isListeningNewComp = false
+                                                            val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
+                                                            newComplementInput = if (comp.isNotBlank()) comp else result
+                                                        },
+                                                        onError = { err ->
+                                                            isListeningNewComp = false
+                                                            ToastHelper.show(serviceContext, err)
+                                                        }
+                                                    )
+                                                }
                                             }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Mic,
+                                                contentDescription = "Falar Complemento",
+                                                tint = if (isListeningNewComp) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                modifier = Modifier.size(18.dp)
+                                            )
                                         }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Mic,
-                                            contentDescription = "Falar Complemento",
-                                            tint = if (isListeningNewComp) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                            }
 
                             // Sugestões Rápidas de Complementos Comuns
                             Text(
@@ -7001,43 +7295,49 @@ class FloatingBubbleService : Service(), LifecycleOwner, SavedStateRegistryOwner
                                 color = Color(0xFF424242)
                             )
 
-                            OutlinedTextField(
-                                value = targetNewComplementInput,
-                                onValueChange = { targetNewComplementInput = it },
-                                placeholder = { Text("Ex: Apto 102, Casa 2, Fundos", fontSize = 12.sp) },
-                                trailingIcon = {
-                                    IconButton(
-                                        onClick = {
-                                            if (!isListeningChangeComp) {
-                                                isListeningChangeComp = true
-                                                com.example.util.SpeechHelper.startListening(
-                                                    context = serviceContext,
-                                                    onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
-                                                    onResult = { result ->
-                                                        isListeningChangeComp = false
-                                                        val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
-                                                        targetNewComplementInput = if (comp.isNotBlank()) comp else result
-                                                    },
-                                                    onError = { err ->
-                                                        isListeningChangeComp = false
-                                                        ToastHelper.show(serviceContext, err)
-                                                    }
-                                                )
-                                            }
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Mic,
-                                            contentDescription = "Falar Complemento",
-                                            tint = if (isListeningChangeComp) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
+                            com.example.ui.components.PasteSupportBox(
+                                text = targetNewComplementInput,
+                                onPasteText = { targetNewComplementInput = it },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = targetNewComplementInput,
+                                    onValueChange = { targetNewComplementInput = it },
+                                    placeholder = { Text("Ex: Apto 102, Casa 2, Fundos", fontSize = 12.sp) },
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = {
+                                                if (!isListeningChangeComp) {
+                                                    isListeningChangeComp = true
+                                                    com.example.util.SpeechHelper.startListening(
+                                                        context = serviceContext,
+                                                        onReady = { ToastHelper.show(serviceContext, "Fale o complemento...") },
+                                                        onResult = { result ->
+                                                            isListeningChangeComp = false
+                                                            val comp = com.example.util.SpeechHelper.processSpokenComplement(result)
+                                                            targetNewComplementInput = if (comp.isNotBlank()) comp else result
+                                                        },
+                                                        onError = { err ->
+                                                            isListeningChangeComp = false
+                                                            ToastHelper.show(serviceContext, err)
+                                                        }
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Mic,
+                                                contentDescription = "Falar Complemento",
+                                                tint = if (isListeningChangeComp) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                            }
 
                             // Sugestões de complementos já existentes no endereço
                             val distinctComps = automationState.candidatePersons

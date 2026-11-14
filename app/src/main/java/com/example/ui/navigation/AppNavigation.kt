@@ -17,7 +17,6 @@ import com.example.ui.screens.delivery.DeliveryModeViewModel
 import com.example.ui.screens.diagnostic.DiagnosticScreen
 import com.example.ui.screens.home.HomeScreen
 import com.example.ui.screens.home.HomeViewModel
-import com.example.ui.screens.lab.AutomationLabScreen
 import com.example.ui.screens.people.PeopleListScreen
 import com.example.ui.screens.people.PeopleViewModel
 import com.example.ui.screens.people.PersonEditScreen
@@ -172,12 +171,6 @@ fun AppNavigation(
             )
         }
 
-        composable(Screen.AutomationLab.route) {
-            AutomationLabScreen(
-                onNavigateBack = { navController.popBackStack() }
-            )
-        }
-
         composable(Screen.AccessibilitySettings.route) {
             AccessibilitySettingsScreen(
                 onNavigateBack = { navController.popBackStack() }
@@ -192,16 +185,6 @@ fun AppNavigation(
 
         composable(Screen.Diagnostic.route) {
             DiagnosticScreen(
-                onNavigateBack = { navController.popBackStack() }
-            )
-        }
-
-        composable(Screen.DailyReport.route) {
-            val dailyReportViewModel: com.example.ui.screens.report.DailyReportViewModel = viewModel(
-                factory = com.example.ui.screens.report.DailyReportViewModel.Factory(app.activityReportRepository)
-            )
-            com.example.ui.screens.report.DailyReportScreen(
-                viewModel = dailyReportViewModel,
                 onNavigateBack = { navController.popBackStack() }
             )
         }

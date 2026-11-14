@@ -764,15 +764,21 @@ fun SettingsScreen(
                     Column {
                         Text("Cole o JSON de backup abaixo:", fontSize = 12.sp)
                         Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = importJsonText,
-                            onValueChange = { importJsonText = it },
-                            placeholder = { Text("Cole aqui o JSON exportado...") },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(180.dp),
-                            textStyle = MaterialTheme.typography.bodySmall
-                        )
+                        com.example.ui.components.PasteSupportBox(
+                            text = importJsonText,
+                            onPasteText = { importJsonText = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = importJsonText,
+                                onValueChange = { importJsonText = it },
+                                placeholder = { Text("Cole aqui o JSON exportado...") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp),
+                                textStyle = MaterialTheme.typography.bodySmall
+                            )
+                        }
                     }
                 },
                 confirmButton = {
@@ -1011,29 +1017,35 @@ fun SettingsScreen(
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
-                        OutlinedTextField(
-                            value = citySearchInput,
-                            onValueChange = { citySearchInput = it },
-                            label = { Text("Nome da Cidade ($selectedStateUf)") },
-                            placeholder = { Text("Ex: Monte Santo, Mococa, Passos...") },
-                            leadingIcon = {
-                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
-                            },
-                            trailingIcon = {
-                                if (citySearchInput.isNotBlank()) {
-                                    IconButton(onClick = { citySearchInput = "" }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Limpar", modifier = Modifier.size(16.dp))
+                        com.example.ui.components.PasteSupportBox(
+                            text = citySearchInput,
+                            onPasteText = { citySearchInput = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = citySearchInput,
+                                onValueChange = { citySearchInput = it },
+                                label = { Text("Nome da Cidade ($selectedStateUf)") },
+                                placeholder = { Text("Ex: Monte Santo, Mococa, Passos...") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                },
+                                trailingIcon = {
+                                    if (citySearchInput.isNotBlank()) {
+                                        IconButton(onClick = { citySearchInput = "" }) {
+                                            Icon(Icons.Default.Close, contentDescription = "Limpar", modifier = Modifier.size(16.dp))
+                                        }
                                     }
-                                }
-                            },
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(onDone = {
-                                keyboardController?.hide()
-                                focusManager.clearFocus()
-                            }),
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
+                                },
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = {
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus()
+                                }),
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
 
                         // 3. Passo: Lista de cidades que surgem conforme digita
                         val isCustomCityNeeded = citySearchInput.isNotBlank() &&
@@ -1182,31 +1194,49 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
 
-                        OutlinedTextField(
-                            value = newStreetTipo,
-                            onValueChange = { newStreetTipo = it },
-                            label = { Text("Tipo (Rua, Av, Praça, Travessa)") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
+                        com.example.ui.components.PasteSupportBox(
+                            text = newStreetTipo,
+                            onPasteText = { newStreetTipo = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = newStreetTipo,
+                                onValueChange = { newStreetTipo = it },
+                                label = { Text("Tipo (Rua, Av, Praça, Travessa)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
 
-                        OutlinedTextField(
-                            value = newStreetNome,
-                            onValueChange = { newStreetNome = it },
-                            label = { Text("Nome do Logradouro *") },
-                            placeholder = { Text("Ex: Cel. Antônio Paulino") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
+                        com.example.ui.components.PasteSupportBox(
+                            text = newStreetNome,
+                            onPasteText = { newStreetNome = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = newStreetNome,
+                                onValueChange = { newStreetNome = it },
+                                label = { Text("Nome do Logradouro *") },
+                                placeholder = { Text("Ex: Cel. Antônio Paulino") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
 
-                        OutlinedTextField(
-                            value = newStreetBairro,
-                            onValueChange = { newStreetBairro = it },
-                            label = { Text("Bairro") },
-                            placeholder = { Text("Ex: Centro, Vila Nova") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
+                        com.example.ui.components.PasteSupportBox(
+                            text = newStreetBairro,
+                            onPasteText = { newStreetBairro = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = newStreetBairro,
+                                onValueChange = { newStreetBairro = it },
+                                label = { Text("Bairro") },
+                                placeholder = { Text("Ex: Centro, Vila Nova") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
                     }
                 },
                 confirmButton = {

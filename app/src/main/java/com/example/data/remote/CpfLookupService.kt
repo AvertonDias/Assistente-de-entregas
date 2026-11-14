@@ -123,7 +123,8 @@ object CpfLookupService {
                 return@withContext CpfLookupResult(success = false, errorMessage = msg)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Falha ao consultar CPF $cleanCpf", e)
+            val maskedCpf = if (cleanCpf.length >= 6) "***.${cleanCpf.substring(3, 6)}.***-**" else "***"
+            Log.e(TAG, "Falha na consulta de CPF ($maskedCpf): ${e.message}")
             return@withContext CpfLookupResult(
                 success = false,
                 errorMessage = e.localizedMessage ?: "Falha de conexão com o servidor de consulta"

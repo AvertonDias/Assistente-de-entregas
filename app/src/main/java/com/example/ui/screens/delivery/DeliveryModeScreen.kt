@@ -135,8 +135,7 @@ fun DeliveryModeScreen(
                 .background(MaterialTheme.colorScheme.background),
             contentAlignment = Alignment.TopCenter
         ) {
-            SelectionContainer {
-                LazyColumn(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .widthIn(max = 700.dp)
@@ -160,13 +159,18 @@ fun DeliveryModeScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = state.currentAddress,
-                            onValueChange = { viewModel.updateAddress(it) },
-                            placeholder = { Text("Ex: Cel. Francisco Paulino da Costa, 630") },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("delivery_address_input"),
+                        com.example.ui.components.PasteSupportBox(
+                            text = state.currentAddress,
+                            onPasteText = { viewModel.updateAddress(it) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = state.currentAddress,
+                                onValueChange = { viewModel.updateAddress(it) },
+                                placeholder = { Text("Ex: Cel. Francisco Paulino da Costa, 630") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("delivery_address_input"),
                             trailingIcon = {
                                 Row {
                                     IconButton(
@@ -206,6 +210,7 @@ fun DeliveryModeScreen(
                             },
                             singleLine = true
                         )
+                        }
                     }
                 }
             }
@@ -337,7 +342,8 @@ fun DeliveryModeScreen(
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                    SelectionContainer {
+                        Column(modifier = Modifier.padding(14.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -393,6 +399,7 @@ fun DeliveryModeScreen(
                                 Text("CADASTRAR NOVO DESTINATÁRIO", fontSize = 12.sp)
                             }
                         }
+                    }
                     }
                 }
             }
@@ -538,5 +545,4 @@ fun DeliveryModeScreen(
         }
         }
     }
-}
 }

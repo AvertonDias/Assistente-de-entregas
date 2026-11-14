@@ -618,6 +618,13 @@ object AddressNormalizer {
         "NUMERO" to " "
     )
 
+    private val NORMALIZED_ABBREVIATIONS: List<Pair<String, String>> by lazy {
+        ABBREVIATIONS.map { (abbr, full) ->
+            val normalizedAbbr = REGEX_DIACRITICS.replace(Normalizer.normalize(abbr, Normalizer.Form.NFD), "").uppercase(Locale.ROOT)
+            normalizedAbbr to full
+        }
+    }
+
     /**
      * Extrai apenas a rua e o número da casa a partir de um texto de endereço lido.
      * Trata pontuações, formatos com ponto-e-vírgula (LOEC/DDA), bairros e cidades no texto.
@@ -717,9 +724,7 @@ object AddressNormalizer {
         text = REGEX_GLUED_PREFIXES.replace(text, "$1 $2")
 
         // 2. Substituir abreviações conhecidas
-        for ((abbr, full) in ABBREVIATIONS) {
-            val normalizedAbbr = REGEX_DIACRITICS.replace(Normalizer.normalize(abbr, Normalizer.Form.NFD), "").uppercase(Locale.ROOT)
-
+        for ((normalizedAbbr, full) in NORMALIZED_ABBREVIATIONS) {
             if (text.startsWith("$normalizedAbbr ") || text.startsWith(normalizedAbbr)) {
                 text = text.replaceFirst(normalizedAbbr, full)
             }
@@ -857,72 +862,152 @@ object AddressNormalizer {
         return words
     }
 
+    private val STREET_TITLES = setOf(
+        "SAO", "SANTO", "SANTA", "PRESIDENTE", "GOVERNADOR", "DOUTOR", "DR", "CORONEL", "CEL",
+        "PROFESSOR", "PROF", "PADRE", "PE", "DOM", "MINISTRO", "GENERAL", "GEN", "ALMIRANTE",
+        "CAPITAO", "TENENTE", "MAJOR", "SARGENTO", "DELEGADO", "VEREADOR", "PREFEITO",
+        "DEPUTADO", "SENADOR", "PRINCESA", "PRINCEPE", "BARAO", "BARONESA", "CONDE", "VISCONDE"
+    )
+
+    private fun isTokenMatchedInList(token: String, targetList: List<String>, allowInitial: Boolean): Boolean {
+        if (targetList.any { isSimilarWord(token, it) }) return true
+        if (allowInitial && token.length == 1 && token[0].isLetter()) {
+            return targetList.any { it.length >= 2 && it.startsWith(token) }
+        }
+        return false
+    }
+
     /**
-     * Verifica com precisão se dois nomes de rua / logradouro correspondem à MESMA rua.
-     * Requer que as palavras essenciais do nome da rua combinem, impedindo falsos positivos
-     * entre ruas distintas (ex: "São Pedro" vs "São Paulo", ou "Tiradentes" vs "Getúlio Vargas").
+     * Calcula uma pontuação de 0 a 100 indicando o nível de correspondência entre dois nomes de rua:
+     * - 100: exatamente igual
+     * - 90..99: todas as palavras essenciais combinam (inclusive em ordem trocada, ex: "Francisco Antônio da Luz" vs "Antônio Francisco da Luz")
+     * - 65..89: correspondência parcial inteligente (ex: "Vital" ou "Vital Paulino" vs "Avenida Vital Paulino da Costa")
+     * - 0: não corresponde
      */
-    fun areStreetNamesMatching(street1: String?, street2: String?): Boolean {
-        if (street1.isNullOrBlank() || street2.isNullOrBlank()) return false
+    fun scoreStreetNamesMatch(street1: String?, street2: String?): Int {
+        if (street1.isNullOrBlank() || street2.isNullOrBlank()) return 0
 
         val s1 = normalize(street1).trim()
         val s2 = normalize(street2).trim()
-        if (s1 == s2) return true
+        if (s1 == s2) return 100
 
         val stripped1 = stripStreetType(s1).trim().ifBlank { s1 }
         val stripped2 = stripStreetType(s2).trim().ifBlank { s2 }
-        if (stripped1 == stripped2) return true
+        if (stripped1 == stripped2) return 100
 
         val core1 = stripped1.filter { it.isLetterOrDigit() }
         val core2 = stripped2.filter { it.isLetterOrDigit() }
-        if (core1 == core2 && core1.isNotBlank()) return true
+        if (core1 == core2 && core1.isNotBlank()) return 100
 
         val words1 = extractStreetSignificantWords(stripped1)
         val words2 = extractStreetSignificantWords(stripped2)
 
         if (words1.isEmpty() || words2.isEmpty()) {
-            return core1.isNotBlank() && core1 == core2
+            return if (core1.isNotBlank() && core1 == core2) 100 else 0
         }
 
-        // Se ambos são de palavra única (ex: "TIRADENTES" vs "TIRADENTES", ou "A" vs "A")
+        // Trata palavras unidas ou separadas por erro de digitação/OCR (ex: "Santa Ana" vs "Santana")
+        val joined1 = words1.joinToString("")
+        val joined2 = words2.joinToString("")
+        if (joined1.length >= 6 && joined2.length >= 6) {
+            if (joined1 == joined2) return 96
+            if (levenshteinDistance(joined1, joined2) <= 1) return 92
+        }
+
+        // Se ambos são de palavra única (ex: "TIRADENTES" vs "TIRADENTES")
         if (words1.size == 1 && words2.size == 1) {
-            return isSimilarWord(words1[0], words2[0])
+            return when {
+                words1[0] == words2[0] -> 100
+                isSimilarWord(words1[0], words2[0]) -> 90
+                else -> 0
+            }
         }
 
-        // Títulos e modificadores comuns em logradouros que NÃO podem ser o único match
-        val streetTitles = setOf(
-            "SAO", "SANTO", "SANTA", "PRESIDENTE", "GOVERNADOR", "DOUTOR", "DR", "CORONEL", "CEL",
-            "PROFESSOR", "PROF", "PADRE", "PE", "DOM", "MINISTRO", "GENERAL", "GEN", "ALMIRANTE",
-            "CAPITAO", "TENENTE", "MAJOR", "SARGENTO", "DELEGADO", "VEREADOR", "PREFEITO",
-            "DEPUTADO", "SENADOR", "PRINCESA", "PRINCEPE", "BARAO", "BARONESA", "CONDE", "VISCONDE"
-        )
-
-        val nonTitleWords1 = words1.filter { it !in streetTitles }
-        val nonTitleWords2 = words2.filter { it !in streetTitles }
+        val nonTitleWords1 = words1.filter { it !in STREET_TITLES }
+        val nonTitleWords2 = words2.filter { it !in STREET_TITLES }
 
         if (nonTitleWords1.isEmpty() || nonTitleWords2.isEmpty()) {
-            return words1 == words2
+            return when {
+                words1 == words2 -> 100
+                words1.size == words2.size && words1.all { w1 -> words2.any { w2 -> isSimilarWord(w1, w2) } } -> 92
+                else -> 0
+            }
         }
 
+        val allowInitial1 = nonTitleWords1.size >= 2
+        val allowInitial2 = nonTitleWords2.size >= 2
+
         val matchedNonTitles1 = nonTitleWords1.count { w1 ->
-            nonTitleWords2.any { w2 -> isSimilarWord(w1, w2) }
+            isTokenMatchedInList(w1, nonTitleWords2, allowInitial1)
         }
         val matchedNonTitles2 = nonTitleWords2.count { w2 ->
-            nonTitleWords1.any { w1 -> isSimilarWord(w2, w1) }
+            isTokenMatchedInList(w2, nonTitleWords1, allowInitial2)
         }
 
         // Se nenhuma palavra essencial/não-título bateu, NÃO CORRESPONDE!
         if (matchedNonTitles1 == 0 || matchedNonTitles2 == 0) {
-            return false
+            return 0
         }
+
+        val exactMatched1 = nonTitleWords1.count { w1 -> nonTitleWords2.any { w2 -> w1 == w2 } }
+        val exactMatched2 = nonTitleWords2.count { w2 -> nonTitleWords1.any { w1 -> w2 == w1 } }
 
         val ratio1 = matchedNonTitles1.toFloat() / nonTitleWords1.size
         val ratio2 = matchedNonTitles2.toFloat() / nonTitleWords2.size
 
-        return (ratio1 >= 0.6f && ratio2 >= 0.6f) ||
-               (ratio1 >= 0.75f && nonTitleWords2.size == 1) ||
-               (ratio2 >= 0.75f && nonTitleWords1.size == 1) ||
-               (matchedNonTitles1 >= 2 && matchedNonTitles2 >= 2)
+        // 1. Todas as palavras essenciais combinam em ambos os lados (ex: ordem trocada: "Francisco Antônio" vs "Antônio Francisco")
+        if (ratio1 >= 0.99f && ratio2 >= 0.99f) {
+            return if (exactMatched1 == nonTitleWords1.size && exactMatched2 == nonTitleWords2.size) 98 else 93
+        }
+
+        // 2. Correspondência forte na maioria das palavras de ambos os lados
+        if ((ratio1 >= 0.6f && ratio2 >= 0.6f) || (matchedNonTitles1 >= 2 && matchedNonTitles2 >= 2)) {
+            val avgRatio = (ratio1 + ratio2) / 2f
+            return (80 + (avgRatio * 15f).toInt()).coerceIn(80, 95)
+        }
+
+        // 3. Correspondência parcial por subconjunto (endereço incompleto: ex "Vital" ou "Vital Paulino" vs "Avenida Vital Paulino da Costa")
+        val shorter = if (nonTitleWords1.size <= nonTitleWords2.size) nonTitleWords1 else nonTitleWords2
+        val longer = if (nonTitleWords1.size <= nonTitleWords2.size) nonTitleWords2 else nonTitleWords1
+        val matchedShorter = if (nonTitleWords1.size <= nonTitleWords2.size) matchedNonTitles1 else matchedNonTitles2
+        val exactShorter = if (nonTitleWords1.size <= nonTitleWords2.size) exactMatched1 else exactMatched2
+
+        if (matchedShorter == shorter.size) {
+            if (shorter.size >= 2) {
+                // 2+ palavras (ex: "Vital Paulino" ou "Antônio da Luz") todas presentes no logradouro completo
+                val exactBonus = if (exactShorter == shorter.size) 4 else 0
+                return (82 + exactBonus).coerceAtMost(89)
+            } else {
+                // 1 palavra essencial (ex: "Vital" dentro de "Avenida Vital Paulino da Costa")
+                val onlyWord = shorter[0]
+                val isOnlyDigits = onlyWord.all { it.isDigit() }
+                val isDistinctive = onlyWord.length >= 3 && (!isOnlyDigits || longer.size <= 2)
+                if (isDistinctive) {
+                    val hasExactWord = longer.any { it == onlyWord }
+                    val hasPrefixWord = onlyWord.length >= 4 && longer.any { it.startsWith(onlyWord) || onlyWord.startsWith(it) }
+                    val hasFuzzyWord = onlyWord.length >= 5 && longer.any { isSimilarWord(onlyWord, it) }
+
+                    return when {
+                        hasExactWord -> (75 + (4 / longer.size.coerceAtLeast(1))).coerceAtMost(79)
+                        hasPrefixWord -> 69
+                        hasFuzzyWord -> 65
+                        else -> 0
+                    }
+                }
+            }
+        }
+
+        return 0
+    }
+
+    /**
+     * Verifica com inteligência se dois nomes de rua / logradouro correspondem à MESMA rua,
+     * aceitando palavras em ordem trocada (ex: "Francisco Antônio" vs "Antônio Francisco")
+     * e endereços parciais/incompletos (ex: "Vital" vs "Avenida Vital Paulino da Costa"),
+     * sem gerar falsos positivos entre ruas distintas (ex: "São Pedro" vs "São Paulo").
+     */
+    fun areStreetNamesMatching(street1: String?, street2: String?): Boolean {
+        return scoreStreetNamesMatch(street1, street2) > 0
     }
 
     /**
@@ -1055,6 +1140,7 @@ object AddressNormalizer {
     fun isSimilarWord(w1: String, w2: String): Boolean {
         if (w1 == w2) return true
         if (w1.isBlank() || w2.isBlank()) return false
+        if (w1.all { it.isDigit() } || w2.all { it.isDigit() }) return w1 == w2
         if (w1.length >= 4 && w2.length >= 4 && (w1.startsWith(w2) || w2.startsWith(w1))) return true
 
         val maxLen = maxOf(w1.length, w2.length)

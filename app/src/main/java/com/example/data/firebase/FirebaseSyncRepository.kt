@@ -169,6 +169,7 @@ class FirebaseSyncRepositoryImpl(
                         val b = firestore.batch()
                         for (p in chunk) {
                             val docRef = userPersonsRef.document(p.id.toString())
+                            val isVerified = com.example.data.remote.CpfVerificationTracker.isCpfVerified(p.documento)
                             val fbPerson = FirebasePerson(
                                 id = p.id.toString(),
                                 localId = p.id,
@@ -185,7 +186,8 @@ class FirebaseSyncRepositoryImpl(
                                 assinatura = p.assinatura,
                                 coRecebedoresJson = p.coRecebedoresJson,
                                 dataCriacao = p.dataCriacao,
-                                dataAtualizacao = p.dataAtualizacao
+                                dataAtualizacao = p.dataAtualizacao,
+                                cpfVerificado = isVerified
                             )
                             b.set(docRef, fbPerson, SetOptions.merge())
                         }
@@ -202,6 +204,7 @@ class FirebaseSyncRepositoryImpl(
                                     val subBatch = firestore.batch()
                                     for (p in subChunk) {
                                         val docRef = userPersonsRef.document(p.id.toString())
+                                        val isVerified = com.example.data.remote.CpfVerificationTracker.isCpfVerified(p.documento)
                                         val fbPerson = FirebasePerson(
                                             id = p.id.toString(),
                                             localId = p.id,
@@ -218,7 +221,8 @@ class FirebaseSyncRepositoryImpl(
                                             assinatura = p.assinatura,
                                             coRecebedoresJson = p.coRecebedoresJson,
                                             dataCriacao = p.dataCriacao,
-                                            dataAtualizacao = p.dataAtualizacao
+                                            dataAtualizacao = p.dataAtualizacao,
+                                            cpfVerificado = isVerified
                                         )
                                         subBatch.set(docRef, fbPerson, SetOptions.merge())
                                     }
@@ -239,6 +243,31 @@ class FirebaseSyncRepositoryImpl(
                     processedCount = totalUploaded,
                     totalCount = totalPersons
                 )
+            }
+            // 3. Sincroniza coleção de CPFs verificados na nuvem
+            try {
+                val verifiedMap = com.example.data.remote.CpfVerificationTracker.getAllVerifiedEntries()
+                if (verifiedMap.isNotEmpty()) {
+                    val verifiedRef = firestore.collection("users")
+                        .document(userId)
+                        .collection("cpfs_verificados")
+                    for (batchChunk in verifiedMap.entries.chunked(200)) {
+                        val verifiedBatch = firestore.batch()
+                        for ((digits, entry) in batchChunk) {
+                            val vDoc = verifiedRef.document(digits)
+                            val data = mapOf(
+                                "cpfDigits" to digits,
+                                "verifiedName" to entry.verifiedName,
+                                "verifiedTimestamp" to entry.verifiedTimestamp,
+                                "verified" to true
+                            )
+                            verifiedBatch.set(vDoc, data, SetOptions.merge())
+                        }
+                        verifiedBatch.commit().await()
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w("FirebaseSync", "Aviso upload cpfs_verificados: ${e.message}")
             }
 
             _syncState.value = SyncState.Syncing(
@@ -311,11 +340,27 @@ class FirebaseSyncRepositoryImpl(
             for (doc in personsSnapshot.documents) {
                 val it = doc.toObject(FirebasePerson::class.java)
                 if (it != null) {
+                    val isDocVerified = it.cpfVerificado || doc.getBoolean("cpfVerificado") == true
+                    if (isDocVerified && it.documento.isNotBlank()) {
+                        com.example.data.remote.CpfVerificationTracker.markCpfVerified(it.documento, it.nome, syncToCloud = false)
+                    }
+
                     val safeRecebedores = if (it.coRecebedoresJson.isNotBlank()) {
                         it.coRecebedoresJson
                     } else {
                         doc.getString("coRecebedoresJson") ?: ""
                     }
+                    if (safeRecebedores.isNotBlank()) {
+                        try {
+                            val parsedRecs = com.example.data.model.Recebedor.listFromJson(safeRecebedores)
+                            for (r in parsedRecs) {
+                                if (r.cpfVerificado && r.documento.isNotBlank()) {
+                                    com.example.data.remote.CpfVerificationTracker.markCpfVerified(r.documento, r.nome, syncToCloud = false)
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                    }
+
                     val primaryPerson = Person(
                         id = if (it.localId > 0) it.localId else 0,
                         nome = it.nome,
@@ -354,6 +399,33 @@ class FirebaseSyncRepositoryImpl(
                 try {
                     com.example.DeliveryApp.instance.personRepository.consolidateDuplicateAddressPersons()
                 } catch (_: Throwable) {}
+            }
+
+            // Baixa catálogo de CPFs verificados na nuvem
+            try {
+                val verifiedSnapshot = firestore.collection("users")
+                    .document(userId)
+                    .collection("cpfs_verificados")
+                    .get()
+                    .await()
+                if (!verifiedSnapshot.isEmpty) {
+                    val incoming = mutableMapOf<String, com.example.data.remote.CpfVerifiedEntry>()
+                    for (vDoc in verifiedSnapshot.documents) {
+                        val digits = vDoc.id.filter { it.isDigit() }
+                        if (digits.length == 11) {
+                            incoming[digits] = com.example.data.remote.CpfVerifiedEntry(
+                                cpfDigits = digits,
+                                verifiedName = vDoc.getString("verifiedName") ?: "",
+                                verifiedTimestamp = vDoc.getLong("verifiedTimestamp") ?: System.currentTimeMillis()
+                            )
+                        }
+                    }
+                    if (incoming.isNotEmpty()) {
+                        com.example.data.remote.CpfVerificationTracker.importVerifiedEntries(incoming)
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w("FirebaseSync", "Aviso download cpfs_verificados: ${e.message}")
             }
 
             _syncState.value = SyncState.Syncing(
@@ -396,6 +468,7 @@ class FirebaseSyncRepositoryImpl(
                     .collection("pessoas")
                     .document(person.id.toString())
 
+                val isVerified = com.example.data.remote.CpfVerificationTracker.isCpfVerified(person.documento)
                 val fbPerson = FirebasePerson(
                     id = person.id.toString(),
                     localId = person.id,
@@ -412,9 +485,27 @@ class FirebaseSyncRepositoryImpl(
                     assinatura = person.assinatura,
                     coRecebedoresJson = person.coRecebedoresJson,
                     dataCriacao = person.dataCriacao,
-                    dataAtualizacao = person.dataAtualizacao
+                    dataAtualizacao = person.dataAtualizacao,
+                    cpfVerificado = isVerified
                 )
                 docRef.set(fbPerson, SetOptions.merge()).await()
+
+                if (isVerified) {
+                    val cleanDigits = person.documento.filter { it.isDigit() }
+                    if (cleanDigits.length == 11) {
+                        val vDoc = firestore.collection("users")
+                            .document(userId)
+                            .collection("cpfs_verificados")
+                            .document(cleanDigits)
+                        val vData = mapOf(
+                            "cpfDigits" to cleanDigits,
+                            "verifiedName" to person.nome,
+                            "verifiedTimestamp" to System.currentTimeMillis(),
+                            "verified" to true
+                        )
+                        vDoc.set(vData, SetOptions.merge())
+                    }
+                }
             }
             true
         } catch (e: Exception) {

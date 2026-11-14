@@ -243,6 +243,20 @@ object SpeechHelper {
         }
     }
 
+    enum class DocumentType(val label: String) {
+        CPF("CPF"),
+        RG("RG"),
+        CNPJ("CNPJ"),
+        OUTRO("Documento")
+    }
+
+    data class DocumentClassification(
+        val type: DocumentType?,
+        val isValid: Boolean?,
+        val typeLabel: String,
+        val description: String
+    )
+
     /**
      * Valida se um documento (CPF ou RG) é válido.
      */
@@ -257,6 +271,11 @@ object SpeechHelper {
             return isValidCpf(digitsOnly)
         }
 
+        // Validação de CNPJ (14 dígitos numéricos)
+        if (digitsOnly.length == 14) {
+            return isValidCnpj(digitsOnly)
+        }
+
         // Validação de RG (7 a 10 caracteres alfanuméricos)
         val rgClean = clean.replace(".", "").replace("-", "").replace("/", "").trim()
         if (rgClean.length in 7..10 && rgClean.all { it.isDigit() || it.equals('x', ignoreCase = true) }) {
@@ -264,6 +283,124 @@ object SpeechHelper {
         }
 
         return false
+    }
+
+    /**
+     * Identifica dinamicamente se o documento digitado é CPF, RG ou CNPJ,
+     * informando o tipo, validade e mensagem descritiva em tempo real.
+     */
+    fun classifyDocument(doc: String): DocumentClassification {
+        val clean = doc.trim()
+        if (clean.isBlank()) {
+            return DocumentClassification(
+                type = null,
+                isValid = null,
+                typeLabel = "Documento",
+                description = "Digite CPF, RG ou CNPJ"
+            )
+        }
+
+        val digitsOnly = clean.filter { it.isDigit() }
+        val alnumOnly = clean.filter { it.isLetterOrDigit() }.uppercase(java.util.Locale.ROOT)
+        val hasLetters = alnumOnly.any { it.isLetter() }
+        val rgClean = clean.replace(".", "").replace("-", "").replace("/", "").replace(" ", "").trim()
+
+        // CNPJ: 14 dígitos numéricos
+        if (digitsOnly.length == 14 && alnumOnly.length == 14) {
+            val valid = isValidCnpj(digitsOnly)
+            return DocumentClassification(
+                type = DocumentType.CNPJ,
+                isValid = valid,
+                typeLabel = "CNPJ",
+                description = if (valid) "✓ CNPJ válido (14 dígitos)" else "✗ CNPJ inválido (dígitos verificadores incorretos)"
+            )
+        }
+
+        // CPF: exatamente 11 dígitos numéricos
+        if (digitsOnly.length == 11 && alnumOnly.length == 11) {
+            val valid = isValidCpf(digitsOnly)
+            return DocumentClassification(
+                type = DocumentType.CPF,
+                isValid = valid,
+                typeLabel = "CPF",
+                description = if (valid) "✓ CPF válido (11 dígitos)" else "✗ CPF inválido (dígitos incorretos)"
+            )
+        }
+
+        // RG com letras (ex: 12.345.678-X, SSP, etc.)
+        if (hasLetters && rgClean.length in 5..14) {
+            val isRgStandard = rgClean.length in 7..10 && rgClean.all { it.isDigit() || it.equals('X', ignoreCase = true) }
+            return DocumentClassification(
+                type = DocumentType.RG,
+                isValid = isRgStandard,
+                typeLabel = "RG",
+                description = if (isRgStandard) "✓ RG válido (${rgClean.length} caracteres)" else "RG (${rgClean.length} caracteres)"
+            )
+        }
+
+        // Apenas dígitos
+        if (digitsOnly.isNotEmpty() && digitsOnly.length == alnumOnly.length) {
+            return when {
+                digitsOnly.length < 7 -> {
+                    DocumentClassification(
+                        type = null,
+                        isValid = null,
+                        typeLabel = "Documento",
+                        description = "Digitando... (${digitsOnly.length}/11 dígitos)"
+                    )
+                }
+                digitsOnly.length in 7..10 -> {
+                    // Pode ser RG ou CPF ainda em digitação
+                    DocumentClassification(
+                        type = DocumentType.RG,
+                        isValid = true,
+                        typeLabel = "RG ou CPF...",
+                        description = "✓ RG válido (${digitsOnly.length} dígitos) ou continue para CPF"
+                    )
+                }
+                digitsOnly.length in 12..13 -> {
+                    DocumentClassification(
+                        type = DocumentType.CNPJ,
+                        isValid = null,
+                        typeLabel = "CNPJ...",
+                        description = "Digitando CNPJ (${digitsOnly.length}/14 dígitos)"
+                    )
+                }
+                else -> {
+                    DocumentClassification(
+                        type = DocumentType.OUTRO,
+                        isValid = false,
+                        typeLabel = "Documento",
+                        description = "Documento com quantidade incomum de dígitos (${digitsOnly.length})"
+                    )
+                }
+            }
+        }
+
+        val isValid = isValidDocument(doc)
+        return DocumentClassification(
+            type = DocumentType.OUTRO,
+            isValid = isValid,
+            typeLabel = "Documento",
+            description = if (isValid) "Documento válido" else "Documento com formato inválido"
+        )
+    }
+
+    private fun isValidCnpj(digits: String): Boolean {
+        if (digits.length != 14) return false
+        if (digits.all { it == digits[0] }) return false
+
+        val weights1 = intArrayOf(5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
+        val sum1 = (0..11).sumOf { (digits[it] - '0') * weights1[it] }
+        val rem1 = sum1 % 11
+        val digit1 = if (rem1 < 2) 0 else 11 - rem1
+        if ((digits[12] - '0') != digit1) return false
+
+        val weights2 = intArrayOf(6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
+        val sum2 = (0..12).sumOf { (digits[it] - '0') * weights2[it] }
+        val rem2 = sum2 % 11
+        val digit2 = if (rem2 < 2) 0 else 11 - rem2
+        return (digits[13] - '0') == digit2
     }
 
     private fun isValidCpf(digits: String): Boolean {

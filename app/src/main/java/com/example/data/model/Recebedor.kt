@@ -8,7 +8,8 @@ data class Recebedor(
     val nome: String,
     val documento: String,
     val assinatura: String = "", // JSON estruturado da assinatura
-    val dataUso: Long = 0L
+    val dataUso: Long = 0L,
+    val cpfVerificado: Boolean = false
 ) {
     fun toJsonObject(): JSONObject {
         val obj = JSONObject()
@@ -17,6 +18,7 @@ data class Recebedor(
         obj.put("documento", documento)
         obj.put("assinatura", assinatura)
         obj.put("dataUso", dataUso)
+        obj.put("cpfVerificado", cpfVerificado)
         return obj
     }
 
@@ -24,12 +26,15 @@ data class Recebedor(
         fun fromJsonObject(obj: JSONObject): Recebedor {
             val rawId = obj.optString("id", "").trim()
             val finalId = if (rawId.isNotBlank()) rawId else java.util.UUID.randomUUID().toString()
+            val doc = obj.optString("documento", "")
+            val isVerif = obj.optBoolean("cpfVerificado", false)
             return Recebedor(
                 id = finalId,
                 nome = obj.optString("nome", ""),
-                documento = obj.optString("documento", ""),
+                documento = doc,
                 assinatura = obj.optString("assinatura", ""),
-                dataUso = obj.optLong("dataUso", 0L)
+                dataUso = obj.optLong("dataUso", 0L),
+                cpfVerificado = isVerif
             )
         }
 

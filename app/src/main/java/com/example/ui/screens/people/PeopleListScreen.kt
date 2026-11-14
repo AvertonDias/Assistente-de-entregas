@@ -106,7 +106,6 @@ fun PeopleListScreen(
 
     var personToDelete by remember { mutableStateOf<Person?>(null) }
     var receiverToDelete by remember { mutableStateOf<ReceiverDeleteTarget?>(null) }
-    var filterOnlyMultipleReceivers by remember { mutableStateOf(false) }
 
     var searchInputText by remember(searchQuery) { mutableStateOf(searchQuery) }
     var searchStartTime by remember { mutableStateOf(0L) }
@@ -134,31 +133,22 @@ fun PeopleListScreen(
         }
     }
 
-    fun hasMultipleReceivers(person: Person): Boolean {
-        val json = person.coRecebedoresJson
-        if (json.isBlank() || json == "[]" || json.length < 10) return false
-        if (!json.contains("\"nome\"") && !json.contains("\"documento\"")) return false
-        try {
-            val extras = Recebedor.listFromJson(json)
-            val validExtras = extras.count { it.nome.isNotBlank() || it.documento.isNotBlank() }
-            val hasMain = person.nome.isNotBlank() || person.documento.isNotBlank()
-            return ((if (hasMain) 1 else 0) + validExtras) > 1
-        } catch (_: Throwable) {
-            return false
+    fun countReceivers(person: Person): Int {
+        var count = if (person.nome.isNotBlank() || person.documento.isNotBlank()) 1 else 0
+        if (person.coRecebedoresJson.isNotBlank()) {
+            try {
+                val extras = Recebedor.listFromJson(person.coRecebedoresJson)
+                count += extras.count { it.nome.isNotBlank() || it.documento.isNotBlank() }
+            } catch (_: Throwable) {}
         }
+        return count
     }
 
-    val multipleCount = remember(persons) {
-        persons.count { hasMultipleReceivers(it) }
+    val totalRecebedores = remember(persons) {
+        persons.sumOf { countReceivers(it) }
     }
 
-    val filteredPersons = remember(persons, filterOnlyMultipleReceivers) {
-        if (!filterOnlyMultipleReceivers) {
-            persons
-        } else {
-            persons.filter { hasMultipleReceivers(it) }
-        }
-    }
+    val filteredPersons = persons
 
     Scaffold(
         topBar = {
@@ -205,97 +195,104 @@ fun PeopleListScreen(
                         .fillMaxWidth()
                         .padding(start = if (isWideScreen) 24.dp else 16.dp, end = if (isWideScreen) 24.dp else 16.dp, top = 12.dp, bottom = 6.dp)
                 ) {
-                    OutlinedTextField(
-                        value = searchInputText,
-                        onValueChange = {
+                    com.example.ui.components.PasteSupportBox(
+                        text = searchInputText,
+                        onPasteText = {
                             if (searchStartTime == 0L) {
                                 searchStartTime = System.currentTimeMillis()
                             }
                             searchInputText = it
                         },
-                        placeholder = { Text("Pesquisar por rua, número da rua ou nome...") },
-                        leadingIcon = {
-                            IconButton(
-                                onClick = { performSearchAction(searchInputText) },
-                                modifier = Modifier.testTag("people_search_submit_button")
-                            ) {
-                                Icon(Icons.Default.Search, contentDescription = "Pesquisar")
-                            }
-                        },
-                        trailingIcon = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (searchInputText.isNotBlank()) {
-                                    IconButton(onClick = {
-                                        searchInputText = ""
-                                        searchStartTime = 0L
-                                        viewModel.onSearchQueryChanged("")
-                                    }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Limpar busca")
-                                    }
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = searchInputText,
+                            onValueChange = {
+                                if (searchStartTime == 0L) {
+                                    searchStartTime = System.currentTimeMillis()
                                 }
-                                VoiceInputIconButton(
-                                    hintPrompt = "Fale o nome, rua ou número...",
-                                    onResult = { spoken ->
-                                        val clean = SpeechHelper.processSpokenSearch(spoken)
-                                        if (clean.isNotBlank()) {
-                                            searchInputText = clean
-                                            performSearchAction(clean)
+                                searchInputText = it
+                            },
+                            placeholder = { Text("Pesquisar por rua, número da rua ou nome...") },
+                            leadingIcon = {
+                                IconButton(
+                                    onClick = { performSearchAction(searchInputText) },
+                                    modifier = Modifier.testTag("people_search_submit_button")
+                                ) {
+                                    Icon(Icons.Default.Search, contentDescription = "Pesquisar")
+                                }
+                            },
+                            trailingIcon = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (searchInputText.isNotBlank()) {
+                                        IconButton(onClick = {
+                                            searchInputText = ""
+                                            searchStartTime = 0L
+                                            viewModel.onSearchQueryChanged("")
+                                        }) {
+                                            Icon(Icons.Default.Clear, contentDescription = "Limpar busca")
                                         }
                                     }
-                                )
-                            }
-                        },
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = {
-                            performSearchAction(searchInputText)
-                        }),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("search_people_input"),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surface,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                        ),
-                        singleLine = true
-                    )
+                                    VoiceInputIconButton(
+                                        hintPrompt = "Fale o nome, rua ou número...",
+                                        onResult = { spoken ->
+                                            val clean = SpeechHelper.processSpokenSearch(spoken)
+                                            if (clean.isNotBlank()) {
+                                                searchInputText = clean
+                                                performSearchAction(clean)
+                                            }
+                                        }
+                                    )
+                                }
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = {
+                                performSearchAction(searchInputText)
+                            }),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("search_people_input"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            singleLine = true
+                        )
+                    }
                 }
 
-                // Seletor para mostrar apenas endereços com mais de um recebedor
+                // Indicador com o total de recebedores cadastrados
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = if (isWideScreen) 24.dp else 16.dp, end = if (isWideScreen) 24.dp else 16.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    FilterChip(
-                        selected = filterOnlyMultipleReceivers,
-                        onClick = { filterOnlyMultipleReceivers = !filterOnlyMultipleReceivers },
-                        label = {
-                            Text(
-                                text = if (filterOnlyMultipleReceivers) {
-                                    "Apenas com +1 recebedor ($multipleCount)"
-                                } else {
-                                    "Mais de 1 recebedor ($multipleCount)"
-                                },
-                                fontSize = 12.sp,
-                                fontWeight = if (filterOnlyMultipleReceivers) FontWeight.Bold else FontWeight.Medium
-                            )
-                        },
-                        leadingIcon = {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.testTag("total_receivers_badge")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.People,
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp)
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(16.dp)
                             )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier.testTag("filter_multiple_receivers_chip")
-                    )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Total de recebedores: $totalRecebedores",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
                 }
 
                 if (filteredPersons.isEmpty()) {
@@ -307,16 +304,14 @@ fun PeopleListScreen(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(
-                                imageVector = if (filterOnlyMultipleReceivers) Icons.Default.People else Icons.Default.Person,
+                                imageVector = Icons.Default.Person,
                                 contentDescription = null,
                                 modifier = Modifier.size(64.dp),
                                 tint = Color.LightGray
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                text = if (filterOnlyMultipleReceivers) {
-                                    "Nenhum endereço com múltiplos recebedores encontrado."
-                                } else if (searchQuery.isBlank()) {
+                                text = if (searchQuery.isBlank()) {
                                     "Nenhuma pessoa cadastrada ainda."
                                 } else {
                                     "Nenhum resultado para \"$searchQuery\"."
@@ -338,11 +333,7 @@ fun PeopleListScreen(
                         ) {
                             item(span = { GridItemSpan(2) }) {
                                 Text(
-                                    text = if (filterOnlyMultipleReceivers) {
-                                        "${filteredPersons.size} endereço(s) com mais de 1 recebedor"
-                                    } else {
-                                        "${filteredPersons.size} ${if (filteredPersons.size == 1) "endereço cadastrado" else "endereços cadastrados"}"
-                                    },
+                                    text = "${filteredPersons.size} ${if (filteredPersons.size == 1) "endereço cadastrado" else "endereços cadastrados"} • $totalRecebedores ${if (totalRecebedores == 1) "recebedor" else "recebedores"}",
                                     fontSize = 13.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontWeight = FontWeight.SemiBold
@@ -373,11 +364,7 @@ fun PeopleListScreen(
                         ) {
                             item {
                                 Text(
-                                    text = if (filterOnlyMultipleReceivers) {
-                                        "${filteredPersons.size} endereço(s) com mais de 1 recebedor"
-                                    } else {
-                                        "${filteredPersons.size} ${if (filteredPersons.size == 1) "endereço cadastrado" else "endereços cadastrados"}"
-                                    },
+                                    text = "${filteredPersons.size} ${if (filteredPersons.size == 1) "endereço cadastrado" else "endereços cadastrados"} • $totalRecebedores ${if (totalRecebedores == 1) "recebedor" else "recebedores"}",
                                     fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontWeight = FontWeight.SemiBold
@@ -465,8 +452,8 @@ fun PeopleListScreen(
                             color = Color(0xFF2E7D32),
                             fontWeight = FontWeight.Medium
                         )
+                        }
                     }
-                }
                 },
                 confirmButton = {
                     Button(
@@ -536,8 +523,8 @@ fun PeopleListScreen(
                         } else {
                             Text("Deseja realmente excluir o cadastro de ${target.nome.ifBlank { "Destinatário" }} (${target.endereco}, Nº ${target.numero})? Esta ação não pode ser desfeita.")
                         }
+                        }
                     }
-                }
                 },
                 confirmButton = {
                     Button(
@@ -778,9 +765,16 @@ private fun PersonCardItem(
                                 }
 
                                 if (rec.documento.isNotBlank()) {
+                                    val classified = com.example.util.SpeechHelper.classifyDocument(rec.documento)
+                                    val prefix = when (classified.type) {
+                                        com.example.util.SpeechHelper.DocumentType.CPF -> "CPF"
+                                        com.example.util.SpeechHelper.DocumentType.RG -> "RG"
+                                        com.example.util.SpeechHelper.DocumentType.CNPJ -> "CNPJ"
+                                        else -> "Doc"
+                                    }
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        text = "Doc: ${rec.documento}",
+                                        text = "$prefix: ${rec.documento}",
                                         fontSize = 12.5.sp,
                                         color = MaterialTheme.colorScheme.primary,
                                         fontWeight = FontWeight.Medium,

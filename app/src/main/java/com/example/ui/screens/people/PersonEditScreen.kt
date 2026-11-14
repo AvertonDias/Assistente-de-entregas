@@ -278,7 +278,8 @@ fun PersonEditScreen(
                     id = "main",
                     nome = existing.nome,
                     documento = existing.documento,
-                    assinatura = existing.assinatura
+                    assinatura = existing.assinatura,
+                    cpfVerificado = com.example.data.remote.CpfVerificationTracker.isCpfVerified(existing.documento)
                 )
                 val extraReceivers = Recebedor.listFromJson(existing.coRecebedoresJson)
                 val loadedList = listOf(mainReceiver) + extraReceivers
@@ -365,8 +366,7 @@ fun PersonEditScreen(
                 .blur(if (isAnyModalOrDialogOpen) 12.dp else 0.dp),
             contentAlignment = Alignment.TopCenter
         ) {
-            SelectionContainer {
-                Column(
+            Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .widthIn(max = 700.dp)
@@ -405,11 +405,10 @@ fun PersonEditScreen(
                         }
 
                         // Logradouro / Rua
-                        OutlinedTextField(
-                            value = address,
-                            onValueChange = { newVal ->
-                                // Se for colagem de texto longo com endereço completo em um formulário com número ainda vazio
-                                if (newVal.length - address.length > 5 && (newVal.contains(",") || newVal.contains("-")) && number.isBlank()) {
+                        com.example.ui.components.PasteSupportBox(
+                            text = address,
+                            onPasteText = { newVal ->
+                                if ((newVal.contains(",") || newVal.contains("-")) && number.isBlank()) {
                                     val parsed = AddressNormalizer.parseAddressComponents(newVal)
                                     if (parsed.street.isNotBlank()) {
                                         address = parsed.street
@@ -424,35 +423,57 @@ fun PersonEditScreen(
                                 }
                                 addressError = address.isBlank()
                             },
-                            label = { Text("Logradouro / Rua / Avenida *") },
-                            placeholder = { Text("Ex: Rua das Flores") },
-                            isError = addressError,
-                            supportingText = { if (addressError) Text("O logradouro é obrigatório") },
-                            trailingIcon = {
-                                VoiceInputIconButton(
-                                    hintPrompt = "Fale o nome da rua...",
-                                    onResult = { spoken ->
-                                        val parsed = AddressNormalizer.parseAddressComponents(spoken)
-                                        if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank() || parsed.neighborhood.isNotBlank())) {
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = address,
+                                onValueChange = { newVal ->
+                                    // Se for colagem de texto longo com endereço completo em um formulário com número ainda vazio
+                                    if (newVal.length - address.length > 5 && (newVal.contains(",") || newVal.contains("-")) && number.isBlank()) {
+                                        val parsed = AddressNormalizer.parseAddressComponents(newVal)
+                                        if (parsed.street.isNotBlank()) {
                                             address = parsed.street
                                             if (parsed.number.isNotBlank()) number = parsed.number
                                             if (parsed.complement.isNotBlank() && complement.isBlank()) complement = parsed.complement
                                             if (parsed.neighborhood.isNotBlank() && neighborhood.isBlank()) neighborhood = parsed.neighborhood
                                         } else {
-                                            val streetOnly = SpeechHelper.processSpokenStreet(spoken)
-                                            if (streetOnly.isNotBlank()) {
-                                                address = streetOnly
-                                            }
+                                            address = newVal
                                         }
-                                        addressError = address.isBlank()
+                                    } else {
+                                        address = newVal
                                     }
-                                )
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("person_address_input"),
-                            singleLine = true
-                        )
+                                    addressError = address.isBlank()
+                                },
+                                label = { Text("Logradouro / Rua / Avenida *") },
+                                placeholder = { Text("Ex: Rua das Flores") },
+                                isError = addressError,
+                                supportingText = { if (addressError) Text("O logradouro é obrigatório") },
+                                trailingIcon = {
+                                    VoiceInputIconButton(
+                                        hintPrompt = "Fale o nome da rua...",
+                                        onResult = { spoken ->
+                                            val parsed = AddressNormalizer.parseAddressComponents(spoken)
+                                            if (parsed.street.isNotBlank() && (parsed.number.isNotBlank() || parsed.complement.isNotBlank() || parsed.neighborhood.isNotBlank())) {
+                                                address = parsed.street
+                                                if (parsed.number.isNotBlank()) number = parsed.number
+                                                if (parsed.complement.isNotBlank() && complement.isBlank()) complement = parsed.complement
+                                                if (parsed.neighborhood.isNotBlank() && neighborhood.isBlank()) neighborhood = parsed.neighborhood
+                                            } else {
+                                                val streetOnly = SpeechHelper.processSpokenStreet(spoken)
+                                                if (streetOnly.isNotBlank()) {
+                                                    address = streetOnly
+                                                }
+                                            }
+                                            addressError = address.isBlank()
+                                        }
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("person_address_input"),
+                                singleLine = true
+                            )
+                        }
 
                         // Sugestões de Ruas (Catálogo da Cidade)
                         if (streetSuggestions.isNotEmpty()) {
@@ -506,49 +527,61 @@ fun PersonEditScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            OutlinedTextField(
-                                value = number,
-                                onValueChange = { number = it.replace(".", "") },
-                                label = { Text("Número") },
-                                placeholder = { Text("Ex: 100") },
-                                trailingIcon = {
-                                    VoiceInputIconButton(
-                                        hintPrompt = "Fale o número...",
-                                        onResult = { spoken ->
-                                            val num = SpeechHelper.processSpokenNumber(spoken)
-                                            if (num.isNotBlank()) {
-                                                number = num
+                            com.example.ui.components.PasteSupportBox(
+                                text = number,
+                                onPasteText = { number = it.replace(".", "") },
+                                modifier = Modifier.weight(1.1f)
+                            ) {
+                                OutlinedTextField(
+                                    value = number,
+                                    onValueChange = { number = it.replace(".", "") },
+                                    label = { Text("Número") },
+                                    placeholder = { Text("Ex: 100") },
+                                    trailingIcon = {
+                                        VoiceInputIconButton(
+                                            hintPrompt = "Fale o número...",
+                                            onResult = { spoken ->
+                                                val num = SpeechHelper.processSpokenNumber(spoken)
+                                                if (num.isNotBlank()) {
+                                                    number = num
+                                                }
                                             }
-                                        }
-                                    )
-                                },
-                                modifier = Modifier
-                                    .weight(1.1f)
-                                    .testTag("person_number_input"),
-                                singleLine = true
-                            )
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("person_number_input"),
+                                    singleLine = true
+                                )
+                            }
 
-                            OutlinedTextField(
-                                value = complement,
-                                onValueChange = { complement = it },
-                                label = { Text("Complemento / Unidade") },
-                                placeholder = { Text("Ex: Bloco B Apto 24") },
-                                trailingIcon = {
-                                    VoiceInputIconButton(
-                                        hintPrompt = "Fale o complemento...",
-                                        onResult = { spoken ->
-                                            val comp = SpeechHelper.processSpokenComplement(spoken)
-                                            if (comp.isNotBlank()) {
-                                                complement = comp
+                            com.example.ui.components.PasteSupportBox(
+                                text = complement,
+                                onPasteText = { complement = it },
+                                modifier = Modifier.weight(1.7f)
+                            ) {
+                                OutlinedTextField(
+                                    value = complement,
+                                    onValueChange = { complement = it },
+                                    label = { Text("Complemento / Unidade") },
+                                    placeholder = { Text("Ex: Bloco B Apto 24") },
+                                    trailingIcon = {
+                                        VoiceInputIconButton(
+                                            hintPrompt = "Fale o complemento...",
+                                            onResult = { spoken ->
+                                                val comp = SpeechHelper.processSpokenComplement(spoken)
+                                                if (comp.isNotBlank()) {
+                                                    complement = comp
+                                                }
                                             }
-                                        }
-                                    )
-                                },
-                                modifier = Modifier
-                                    .weight(1.7f)
-                                    .testTag("person_complement_input"),
-                                singleLine = true
-                            )
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("person_complement_input"),
+                                    singleLine = true
+                                )
+                            }
                         }
 
                         // Chips rápidos para complemento
@@ -590,27 +623,33 @@ fun PersonEditScreen(
                         }
 
                         // Campo de Bairro
-                        OutlinedTextField(
-                            value = neighborhood,
-                            onValueChange = { neighborhood = it },
-                            label = { Text("Bairro (Opcional)") },
-                            placeholder = { Text("Ex: Jardim das Rosas") },
-                            trailingIcon = {
-                                VoiceInputIconButton(
-                                    hintPrompt = "Fale o bairro...",
-                                    onResult = { spoken ->
-                                        val br = SpeechHelper.processSpokenNeighborhood(spoken)
-                                        if (br.isNotBlank()) {
-                                            neighborhood = br
+                        com.example.ui.components.PasteSupportBox(
+                            text = neighborhood,
+                            onPasteText = { neighborhood = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = neighborhood,
+                                onValueChange = { neighborhood = it },
+                                label = { Text("Bairro (Opcional)") },
+                                placeholder = { Text("Ex: Jardim das Rosas") },
+                                trailingIcon = {
+                                    VoiceInputIconButton(
+                                        hintPrompt = "Fale o bairro...",
+                                        onResult = { spoken ->
+                                            val br = SpeechHelper.processSpokenNeighborhood(spoken)
+                                            if (br.isNotBlank()) {
+                                                neighborhood = br
+                                            }
                                         }
-                                    }
-                                )
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("person_neighborhood_input"),
-                            singleLine = true
-                        )
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("person_neighborhood_input"),
+                                singleLine = true
+                            )
+                        }
 
                         // Preview visual do endereço cadastrado
                         if (address.isNotBlank() || number.isNotBlank() || complement.isNotBlank()) {
@@ -902,7 +941,11 @@ fun PersonEditScreen(
                         }
 
                         val formattedRecebedores = recebedoresList.map {
-                            it.copy(nome = AddressNormalizer.capitalizeWords(it.nome.trim()))
+                            val isVerif = it.cpfVerificado || com.example.data.remote.CpfVerificationTracker.isCpfVerified(it.documento)
+                            it.copy(
+                                nome = AddressNormalizer.capitalizeWords(it.nome.trim()),
+                                cpfVerificado = isVerif
+                            )
                         }
                         val primaryRecebedor = formattedRecebedores.first()
                         if (primaryRecebedor.nome.isBlank()) {
@@ -963,7 +1006,6 @@ fun PersonEditScreen(
                 }
             }
         }
-        }
     }
 
     // Diálogo de confirmação para remoção de recebedor dentro do endereço
@@ -1014,9 +1056,9 @@ fun PersonEditScreen(
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Medium
                     )
+                    }
                 }
-            }
-        },
+            },
             confirmButton = {
                 Button(
                     onClick = {
@@ -1248,17 +1290,12 @@ fun RecebedorDialog(
         }
     }
 
-    // Ao abrir para editar recebedor que já possui CPF (ou quando o documento for carregado),
-    // consulta automaticamente a API para verificar se o nome cadastrado diverge do oficial
+    // Ao abrir para editar recebedor, limpa os estados de sugestão prévios (consulta manual via botão de busca)
     LaunchedEffect(recebedor.id, recebedor.documento) {
         officialApiName = null
         apiNameCorrectionSuggestion = null
         cpfLookupMessage = null
         lastAutoLookedUpCpf = ""
-        val digits = documento.filter { it.isDigit() }
-        if (digits.length == 11) {
-            performCpfLookup(digits)
-        }
     }
 
     // Mantém a sugestão de correção ativa apenas enquanto o documento corresponder exatamente ao CPF consultado
@@ -1468,61 +1505,72 @@ fun RecebedorDialog(
             )
         },
         text = {
-            SelectionContainer {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                OutlinedTextField(
-                    value = nome,
-                    onValueChange = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                com.example.ui.components.PasteSupportBox(
+                    text = nome,
+                    onPasteText = {
                         nome = it
                         nomeError = it.isBlank()
                         if (apiNameCorrectionSuggestion != null && it.trim().equals(apiNameCorrectionSuggestion!!.trim(), ignoreCase = true)) {
                             apiNameCorrectionSuggestion = null
                         }
                     },
-                    label = { Text("Nome do Recebedor *") },
-                    placeholder = { Text("Ex: Maria da Silva") },
-                    isError = nomeError,
-                    supportingText = { if (nomeError) Text("Nome é obrigatório") },
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                    trailingIcon = {
-                        IconButton(
-                            onClick = {
-                                if (!isListeningName) {
-                                    runWithMicPermission {
-                                        isListeningName = true
-                                        com.example.util.SpeechHelper.startListening(
-                                            context = context,
-                                            onReady = { ToastHelper.show(context, "Fale o nome...") },
-                                            onResult = { result ->
-                                                isListeningName = false
-                                                val processed = com.example.util.SpeechHelper.processSpokenName(result)
-                                                if (processed.isNotBlank()) {
-                                                    nome = processed
-                                                    nomeError = false
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = nome,
+                        onValueChange = {
+                            nome = it
+                            nomeError = it.isBlank()
+                            if (apiNameCorrectionSuggestion != null && it.trim().equals(apiNameCorrectionSuggestion!!.trim(), ignoreCase = true)) {
+                                apiNameCorrectionSuggestion = null
+                            }
+                        },
+                        label = { Text("Nome do Recebedor *") },
+                        placeholder = { Text("Ex: Maria da Silva") },
+                        isError = nomeError,
+                        supportingText = { if (nomeError) Text("Nome é obrigatório") },
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    if (!isListeningName) {
+                                        runWithMicPermission {
+                                            isListeningName = true
+                                            com.example.util.SpeechHelper.startListening(
+                                                context = context,
+                                                onReady = { ToastHelper.show(context, "Fale o nome...") },
+                                                onResult = { result ->
+                                                    isListeningName = false
+                                                    val processed = com.example.util.SpeechHelper.processSpokenName(result)
+                                                    if (processed.isNotBlank()) {
+                                                        nome = processed
+                                                        nomeError = false
+                                                    }
+                                                },
+                                                onError = { err ->
+                                                    isListeningName = false
+                                                    ToastHelper.show(context, err)
                                                 }
-                                            },
-                                            onError = { err ->
-                                                isListeningName = false
-                                                ToastHelper.show(context, err)
-                                            }
-                                        )
+                                            )
+                                        }
                                     }
                                 }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Falar Nome",
+                                    tint = if (isListeningName) MaterialTheme.colorScheme.primary else Color.Gray
+                                )
                             }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Mic,
-                                contentDescription = "Falar Nome",
-                                tint = if (isListeningName) MaterialTheme.colorScheme.primary else Color.Gray
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
 
                 if (apiNameCorrectionSuggestion != null) {
                     val officialName = apiNameCorrectionSuggestion!!
@@ -1626,128 +1674,171 @@ fun RecebedorDialog(
 
                 com.example.ui.components.CpfApiQuotaCard()
 
-                val isDocValidState = remember(documento) {
-                    if (documento.isBlank()) null else com.example.util.SpeechHelper.isValidDocument(documento)
+                val docClassification = remember(documento) {
+                    com.example.util.SpeechHelper.classifyDocument(documento)
                 }
+                val isDocValidState = docClassification.isValid
 
-                OutlinedTextField(
-                    value = documento,
-                    onValueChange = { input ->
+                com.example.ui.components.PasteSupportBox(
+                    text = documento,
+                    onPasteText = { input ->
                         val filtered = input.filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '/' || it == ' ' }.uppercase(java.util.Locale.ROOT)
                         documento = filtered
-                        val digits = filtered.filter { it.isDigit() }
-                        // Prioridade máxima da API: pesquisa automaticamente assim que atinge 11 dígitos de CPF
-                        if (digits.length == 11 && digits != lastAutoLookedUpCpf) {
-                            performCpfLookup(digits)
-                        } else if (filtered.any { it.isLetter() } && filtered.length >= 6 && filtered != lastAutoLookedUpCpf) {
-                            // Documento com letras (ex: RG com sigla estadual MG-12345678)
-                            performCpfLookup(filtered)
-                        }
                     },
-                    label = { Text("Documento (CPF / RG)") },
-                    keyboardOptions = KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Characters,
-                        keyboardType = KeyboardType.Text
-                    ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = when (isDocValidState) {
-                            true -> Color(0xFF2E7D32)
-                            false -> Color(0xFFD32F2F)
-                            null -> MaterialTheme.colorScheme.primary
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = documento,
+                        onValueChange = { input ->
+                            val filtered = input.filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '/' || it == ' ' }.uppercase(java.util.Locale.ROOT)
+                            documento = filtered
                         },
-                        unfocusedBorderColor = when (isDocValidState) {
-                            true -> Color(0xFF4CAF50)
-                            false -> Color(0xFFE53935)
-                            null -> MaterialTheme.colorScheme.outline
-                        }
-                    ),
-                    supportingText = {
-                        if (cpfLookupMessage != null) {
-                            Text(
-                                text = cpfLookupMessage!!,
-                                color = if (cpfLookupMessage!!.startsWith("✓")) Color(0xFF2E7D32) else Color(0xFFD32F2F),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        } else {
-                            val formDocDigits = documento.filter { it.isDigit() }
-                            if (formDocDigits.length == 11 && com.example.data.remote.CpfVerificationTracker.isCpfVerified(formDocDigits)) {
-                                Text("✓ CPF verificado e validado na base oficial da API", color = Color(0xFF2E7D32), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
-                            } else {
-                                when (isDocValidState) {
-                                    true -> Text("Documento válido", color = Color(0xFF2E7D32), fontSize = 11.sp)
-                                    false -> Text("Documento inválido", color = Color(0xFFD32F2F), fontSize = 11.sp)
-                                    null -> null
+                        label = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Documento")
+                                if (docClassification.type != null) {
+                                    Surface(
+                                        color = when (docClassification.type) {
+                                            com.example.util.SpeechHelper.DocumentType.CPF -> Color(0xFFE8F5E9)
+                                            com.example.util.SpeechHelper.DocumentType.RG -> Color(0xFFE3F2FD)
+                                            com.example.util.SpeechHelper.DocumentType.CNPJ -> Color(0xFFFFF3E0)
+                                            else -> Color(0xFFF5F5F5)
+                                        },
+                                        shape = RoundedCornerShape(4.dp),
+                                        border = BorderStroke(1.dp, when (docClassification.type) {
+                                            com.example.util.SpeechHelper.DocumentType.CPF -> Color(0xFF4CAF50)
+                                            com.example.util.SpeechHelper.DocumentType.RG -> Color(0xFF2196F3)
+                                            com.example.util.SpeechHelper.DocumentType.CNPJ -> Color(0xFFFF9800)
+                                            else -> Color(0xFF9E9E9E)
+                                        })
+                                    ) {
+                                        Text(
+                                            text = docClassification.type.label,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = when (docClassification.type) {
+                                                com.example.util.SpeechHelper.DocumentType.CPF -> Color(0xFF2E7D32)
+                                                com.example.util.SpeechHelper.DocumentType.RG -> Color(0xFF1565C0)
+                                                com.example.util.SpeechHelper.DocumentType.CNPJ -> Color(0xFFE65100)
+                                                else -> Color(0xFF616161)
+                                            },
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                } else {
+                                    Text("(CPF / RG / CNPJ)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
                                 }
                             }
-                        }
-                    },
-                    trailingIcon = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (isLookingUpCpfOnline) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp).padding(end = 4.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.primary
+                        },
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Characters,
+                            keyboardType = KeyboardType.Text
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = when (isDocValidState) {
+                                true -> Color(0xFF2E7D32)
+                                false -> Color(0xFFD32F2F)
+                                null -> MaterialTheme.colorScheme.primary
+                            },
+                            unfocusedBorderColor = when (isDocValidState) {
+                                true -> Color(0xFF4CAF50)
+                                false -> Color(0xFFE53935)
+                                null -> MaterialTheme.colorScheme.outline
+                            }
+                        ),
+                        supportingText = {
+                            if (cpfLookupMessage != null) {
+                                Text(
+                                    text = cpfLookupMessage!!,
+                                    color = if (cpfLookupMessage!!.startsWith("✓")) Color(0xFF2E7D32) else Color(0xFFD32F2F),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             } else {
-                                val digits = documento.filter { it.isDigit() }
-                                if (digits.length == 11 || documento.trim().length >= 5) {
+                                val formDocDigits = documento.filter { it.isDigit() }
+                                if (formDocDigits.length == 11 && com.example.data.remote.CpfVerificationTracker.isCpfVerified(formDocDigits)) {
+                                    Text("✓ CPF verificado e validado na base oficial da API", color = Color(0xFF2E7D32), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                                } else if (documento.isNotBlank()) {
+                                    Text(
+                                        text = docClassification.description,
+                                        color = when (docClassification.isValid) {
+                                            true -> Color(0xFF2E7D32)
+                                            false -> Color(0xFFD32F2F)
+                                            null -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        fontSize = 11.sp,
+                                        fontWeight = if (docClassification.isValid != null) FontWeight.SemiBold else FontWeight.Normal
+                                    )
+                                }
+                            }
+                        },
+                        trailingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (isLookingUpCpfOnline) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp).padding(end = 4.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
                                     IconButton(
-                                        onClick = { performCpfLookup(documento) },
+                                        onClick = {
+                                            val raw = documento.trim()
+                                            if (raw.isNotBlank()) {
+                                                performCpfLookup(raw)
+                                            } else {
+                                                ToastHelper.show(context, "Digite o CPF ou documento para pesquisar")
+                                            }
+                                        },
                                         modifier = Modifier.size(32.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Search,
-                                            contentDescription = "Consultar Documento",
+                                            contentDescription = "Consultar CPF na API",
                                             tint = MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }
-                            }
-                            IconButton(
-                                onClick = {
-                                    if (!isListeningDoc) {
-                                        runWithMicPermission {
-                                            isListeningDoc = true
-                                            com.example.util.SpeechHelper.startListening(
-                                                context = context,
-                                                onReady = { ToastHelper.show(context, "Fale os números do documento...") },
-                                                onResult = { result ->
-                                                    isListeningDoc = false
-                                                    val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
-                                                    if (processed.isNotBlank()) {
-                                                        val upper = processed.uppercase(java.util.Locale.ROOT)
-                                                        documento = upper
-                                                        val digits = upper.filter { it.isDigit() }
-                                                        if (digits.length == 11 && digits != lastAutoLookedUpCpf) {
-                                                            performCpfLookup(digits)
+                                IconButton(
+                                    onClick = {
+                                        if (!isListeningDoc) {
+                                            runWithMicPermission {
+                                                isListeningDoc = true
+                                                com.example.util.SpeechHelper.startListening(
+                                                    context = context,
+                                                    onReady = { ToastHelper.show(context, "Fale os números do documento...") },
+                                                    onResult = { result ->
+                                                        isListeningDoc = false
+                                                        val processed = com.example.util.SpeechHelper.processSpokenDocument(result)
+                                                        if (processed.isNotBlank()) {
+                                                            val upper = processed.uppercase(java.util.Locale.ROOT)
+                                                            documento = upper
                                                         }
+                                                    },
+                                                    onError = { err ->
+                                                        isListeningDoc = false
+                                                        ToastHelper.show(context, err)
                                                     }
-                                                },
-                                                onError = { err ->
-                                                    isListeningDoc = false
-                                                    ToastHelper.show(context, err)
-                                                }
-                                            )
+                                                )
+                                            }
                                         }
-                                    }
-                                },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Mic,
-                                    contentDescription = "Falar Documento",
-                                    tint = if (isListeningDoc) MaterialTheme.colorScheme.primary else Color.Gray,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Mic,
+                                        contentDescription = "Falar Documento",
+                                        tint = if (isListeningDoc) MaterialTheme.colorScheme.primary else Color.Gray,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(4.dp))
 
@@ -1853,8 +1944,7 @@ fun RecebedorDialog(
                     }
                 }
             }
-        }
-    },
+        },
         confirmButton = {
             Button(
                 onClick = {
@@ -1862,11 +1952,13 @@ fun RecebedorDialog(
                         nomeError = true
                         return@Button
                     }
+                    val isVerif = recebedor.cpfVerificado || com.example.data.remote.CpfVerificationTracker.isCpfVerified(documento.trim())
                     onSave(
                         recebedor.copy(
                             nome = AddressNormalizer.capitalizeWords(nome.trim()),
                             documento = documento.trim(),
-                            assinatura = localAssinatura
+                            assinatura = localAssinatura,
+                            cpfVerificado = isVerif
                         )
                     )
                 }
@@ -2003,15 +2095,21 @@ fun MoveOrCopyReceiverDialog(
                 )
 
                 // Busca rápida de endereços existentes
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    label = { Text("Buscar Endereço Salvo...") },
-                    placeholder = { Text("Digite rua, número ou nome...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                com.example.ui.components.PasteSupportBox(
+                    text = searchQuery,
+                    onPasteText = { searchQuery = it },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = { Text("Buscar Endereço Salvo...") },
+                        placeholder = { Text("Digite rua, número ou nome...") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
 
                 if (suggestedPersons.isNotEmpty()) {
                     Text(
@@ -2071,46 +2169,73 @@ fun MoveOrCopyReceiverDialog(
                 HorizontalDivider()
 
                 // Preenchimento manual do endereço de destino
-                OutlinedTextField(
-                    value = targetStreet,
-                    onValueChange = {
+                com.example.ui.components.PasteSupportBox(
+                    text = targetStreet,
+                    onPasteText = {
                         targetStreet = it
                         streetError = it.isBlank()
                     },
-                    label = { Text("Rua / Logradouro de Destino *") },
-                    isError = streetError,
-                    supportingText = { if (streetError) Text("Informe a rua de destino") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = targetStreet,
+                        onValueChange = {
+                            targetStreet = it
+                            streetError = it.isBlank()
+                        },
+                        label = { Text("Rua / Logradouro de Destino *") },
+                        isError = streetError,
+                        supportingText = { if (streetError) Text("Informe a rua de destino") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    com.example.ui.components.PasteSupportBox(
+                        text = targetNumber,
+                        onPasteText = { targetNumber = it },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        OutlinedTextField(
+                            value = targetNumber,
+                            onValueChange = { targetNumber = it },
+                            label = { Text("Número") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                    com.example.ui.components.PasteSupportBox(
+                        text = targetComplement,
+                        onPasteText = { targetComplement = it },
+                        modifier = Modifier.weight(1.2f)
+                    ) {
+                        OutlinedTextField(
+                            value = targetComplement,
+                            onValueChange = { targetComplement = it },
+                            label = { Text("Complemento") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                }
+
+                com.example.ui.components.PasteSupportBox(
+                    text = targetBairro,
+                    onPasteText = { targetBairro = it },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     OutlinedTextField(
-                        value = targetNumber,
-                        onValueChange = { targetNumber = it },
-                        label = { Text("Número") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = targetComplement,
-                        onValueChange = { targetComplement = it },
-                        label = { Text("Complemento") },
-                        modifier = Modifier.weight(1.2f),
+                        value = targetBairro,
+                        onValueChange = { targetBairro = it },
+                        label = { Text("Bairro") },
+                        modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
                 }
-
-                OutlinedTextField(
-                    value = targetBairro,
-                    onValueChange = { targetBairro = it },
-                    label = { Text("Bairro") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
             }
         },
         confirmButton = {
